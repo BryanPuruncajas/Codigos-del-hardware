@@ -77,6 +77,10 @@ void RawBicopter::getPreferences() {
     PDterms.servoBeta = preferences.getFloat("servoBeta", 90);
     PDterms.servoRange = preferences.getFloat("servoRange", 260);
     PDterms.botZlim = preferences.getFloat("botZlim", 0.001);
+    PDterms.servo2Mirror = preferences.getBool("servo2Mirror", true);
+    PDterms.yawInvert = preferences.getFloat("yawInvert", 1.0);
+    PDterms.servo1Trim = preferences.getFloat("servo1Trim", 0.0);
+    PDterms.servo2Trim = preferences.getFloat("servo2Trim", 0.0);
     PDterms.pitchOffset = preferences.getFloat("pitchOffset", 0);
     PDterms.pitchInvert = preferences.getFloat("pitchInvert", 1);
     PDterms.servo_move_min = preferences.getFloat("servo_move_min", 2); // degrees
@@ -133,4 +137,3 @@ float RawBicopter::adjustAngle(float angle) {
 float RawBicopter::clamp(float val, float minVal, float maxVal) {
     return std::max(minVal, std::min(maxVal, val));
 }
-

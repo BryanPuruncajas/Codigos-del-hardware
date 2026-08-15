@@ -49,7 +49,7 @@ elif FRAME_SIZE == sensor.HQVGA:
 if board == OPENMV:
     R_GAIN, G_GAIN, B_GAIN = [62, 60, 65]
 elif board == NICLA:
-    R_GAIN, G_GAIN, B_GAIN = [70, 66, 115]
+    R_GAIN, G_GAIN, B_GAIN = [91, 64, 92]
 
 ########## NOTE: MACROS for balloon detection #############
 # Grid setup
@@ -88,7 +88,7 @@ elif board == NICLA:
         "purple": [[23.36438596491228, -39.03035087719298] ,  [[0.0648033747896978, 0.055988642505018865], [0.05598864250501887, 0.058994799618367275]]],
         "green": [[-20.875354509359045, 8.56792399319342] ,  [[0.060236044299697374, 0.04894408879238302], [0.04894408879238302, 0.0646636883366453]]],
         "blue": [[13.596253902185223, -33.79474505723205] ,  [[0.13004108243366663, 0.06653979100910323], [0.06653979100910323, 0.04018167036620918]]],
-        "red": [[53.568024861878456, 11.724102209944752] ,  [[0.03232165802049636, -0.021282694514752485], [-0.021282694514752485, 0.03727551356108449]]]
+        "red": [[50.173846153846156, 25.426923076923078] ,  [[0.01470976874406989, -0.029273398296275985], [-0.029273398296275982, 0.08279564686512679]]]
     } # nicla
 
 
@@ -114,9 +114,7 @@ L_RANGE = {
 COLOR_CONFIDENCE = 0.3
 
 # target balloon colors {color id: (RGB value for visulization)}
-COLOR_TARGET = {"purple": (255,0,255),
-                "green": (0,255,0),}
-               # {"red": (255,0,0)}
+COLOR_TARGET = {"red": (255,0,0)}
 
 # peer blimp color
 COLOR_PEER = {} # {"red": (255, 0, 0)}
@@ -125,7 +123,7 @@ COLOR_PEER = {} # {"red": (255, 0, 0)}
 NEIGHBOR_REMOVAL = True
 NEIGHBOR_REMOVAL_FACTOR = 10.0
 # NEIGHBOR FORMAT: {$neighbor: ($target, RGB value for visulization)}
-COLOR_NEIGHBOR = {"blue": ("purple", (0,0,255))}
+COLOR_NEIGHBOR = {}
 
 
 # tracking parameters

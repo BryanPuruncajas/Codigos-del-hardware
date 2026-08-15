@@ -45,6 +45,26 @@ int niclaOffset = 11;
 int old_flag = 0;
 float forward_force = 0.0;
 
+// ==================== MODO BUSQUEDA AUTONOMA (flag=3) ====================
+// Maquina de estados adaptada de la referencia de simulacion (demopid.py),
+// simplificada porque el hardware real no tiene posicion X/Y absoluta
+// (no hay GPS/mocap), solo camara + IMU (yaw) + barometro (altura relativa).
+enum SearchState { SEARCHING, APPROACHING, CAPTURED_TURN, FINISHED };
+SearchState searchState = SEARCHING;
+int balloonsFound = 0;
+const int TOTAL_BALLOONS = 4;
+unsigned long searchStateTimer = 0;
+
+// Que tan cerca debe verse el globo (ancho del blob en pixeles) para
+// contarlo como "capturado". AJUSTAR segun pruebas reales.
+const float CAPTURE_AREA_THRESHOLD = 60.0;
+// Velocidad de giro mientras busca sin ver nada (rad/s aprox, va directo a tz)
+const float SEARCH_YAW_RATE = 0.35;
+// Cuanto tiempo (ms) gira "a ciegas" tras capturar, antes de volver a buscar
+// (evita re-detectar el mismo globo de inmediato)
+const unsigned long CAPTURED_TURN_MS = 2000;
+// ============================================================================
+
 // Forward declarations (necesarias en .cpp; en .ino el IDE las genera solo)
 void recieveCommands();
 void paramUpdate();
@@ -54,6 +74,16 @@ void fixClockRate();
 void setup() {
     Serial.begin(115200);
     Serial.println("Start!");
+
+    // El pin RST del BNO085 (breakout) esta cableado a D2 segun el PCB.
+    // El firmware original nunca lo tocaba, dejandolo flotando -> el sensor
+    // quedaba en reset intermitente (por eso el I2C scanner lo detectaba
+    // una vez y luego dejaba de responder). Lo ponemos en HIGH para
+    // liberarlo del reset ANTES de inicializar cualquier sensor I2C.
+    pinMode(D2, OUTPUT);
+    digitalWrite(D2, HIGH);
+    delay(50);  // le damos tiempo al sensor para arrancar tras salir de reset
+
     clockTime = micros();
     printTime = micros();
     // init communication
@@ -65,7 +95,10 @@ void setup() {
     myRobot->startup();
     nicla = &(myRobot->sensorsuite);
     paramUpdate();
-    nicla->changeNiclaMode(0x80);
+    // NOTA: se removió nicla->changeNiclaMode(0x80) — ese comando en realidad
+    // saca a la Nicla del modo balloon y la manda a modo goal (aros), que no
+    // usamos en este proyecto (solo visitamos globos). La Nicla ya arranca
+    // en modo balloon (0) por defecto en perception_subsystem.py.
     // updates the ground altitude for the ground feedback
     // TODO: make some way to access the actual ground height from robot
     int numSenses = myRobot->sense(senses);
@@ -92,6 +125,28 @@ void loop() {
   rcv.values[5] = senses[niclaOffset + 9];  //nicla h
   // rcv.values[6] = senses[niclaOffset + 9];  //nicla confidence
   bool sent = baseComm->sendMeasurements(&rcv);
+
+  // DEBUG/CALIBRACION: manda actuadores (servos + motores) y orientacion
+  // completa del IMU a la base por ESP-NOW, para verlo en vivo sin USB.
+  ReceivedData actuatorDebug;
+  actuatorDebug.flag = 3;
+  actuatorDebug.values[0] = myRobot->servo_old1;   // angulo real servo 1 (grados)
+  actuatorDebug.values[1] = myRobot->servo_old2;   // angulo real servo 2 (grados)
+  actuatorDebug.values[2] = myRobot->motor_power1; // potencia motor 1 (0 a 1)
+  actuatorDebug.values[3] = myRobot->motor_power2; // potencia motor 2 (0 a 1)
+  actuatorDebug.values[4] = 0;
+  actuatorDebug.values[5] = 0;
+  baseComm->sendMeasurements(&actuatorDebug);
+
+  ReceivedData orientationDebug;
+  orientationDebug.flag = 4;
+  orientationDebug.values[0] = senses[3];  // roll
+  orientationDebug.values[1] = senses[4];  // pitch
+  orientationDebug.values[2] = senses[5];  // yaw
+  orientationDebug.values[3] = senses[6];  // rollrate
+  orientationDebug.values[4] = senses[7];  // pitchrate
+  orientationDebug.values[5] = senses[8];  // yawrate
+  baseComm->sendMeasurements(&orientationDebug);
 
   // print sensor values every second
   // senses => [temperature, altitude, veloctity_in_altitude, roll, pitch, yaw, rollrate, pitchrate, yawrate, null, battery, nicla_flag, nicla_x, nicla_y, nicla_w, nicla_h, nicla...]
@@ -146,7 +201,96 @@ void loop() {
     behave.params[3] = 0; // tx (radians/second)
     behave.params[4] = nicla_yaw; // tz (radians)
 
-  } else { // direct control with joystick if 'flag' is not 2
+  } else if (cmd.params[0] == 3) {
+    // ================= MODO BUSQUEDA AUTONOMA (4 globos) =================
+    int nicla_flag = (int)senses[niclaOffset + 0];
+    float tracking_x = (float)senses[niclaOffset + 1];
+    float tracking_y = (float)senses[niclaOffset + 2];
+    float nicla_w = (float)senses[niclaOffset + 4];
+    bool ballVisible = (nicla_flag & 0x40) && (nicla_flag & 0b11);
+
+    float search_fx = 0.0;
+    float search_tz = 0.0;
+    float search_fz = cmd.params[2]; // altura la sigue mandando la base (usa zEn si quieres)
+
+    switch (searchState) {
+
+      case SEARCHING:
+        // Sin globo a la vista: gira lento escaneando, sin avanzar.
+        search_tz = SEARCH_YAW_RATE;
+        search_fx = 0.0;
+        if (ballVisible) {
+          Serial.println("[BUSQUEDA] Globo detectado, pasando a ACOPLANDO.");
+          searchState = APPROACHING;
+        }
+        break;
+
+      case APPROACHING:
+        // Reutiliza la misma logica de centrado/avance ya calibrada en flag=2.
+        if (!ballVisible) {
+          Serial.println("[BUSQUEDA] Se perdio el globo, volviendo a BUSCANDO.");
+          searchState = SEARCHING;
+          break;
+        }
+        {
+          float x_cal = tracking_x / terms.n_max_x;
+          float des_yaw = ((x_cal - 0.5)) * terms.x_strength;
+          float _yaw = senses[5];
+          search_tz = 0; // se maneja como offset absoluto de yaw, no tasa; ver nicla_yaw abajo
+          nicla_yaw = _yaw + des_yaw;
+          float y_cal = tracking_y / terms.n_max_y;
+          if (abs(x_cal - 0.5) < terms.fx_charge) {
+            search_fx = terms.fx_togoal;
+          } else {
+            search_fx = 0.0;
+          }
+
+          // Si el globo se ve grande (cerca), lo contamos como capturado.
+          if (nicla_w > CAPTURE_AREA_THRESHOLD) {
+            balloonsFound++;
+            Serial.print("[BUSQUEDA] Globo capturado! Total: ");
+            Serial.println(balloonsFound);
+            if (balloonsFound >= TOTAL_BALLOONS) {
+              searchState = FINISHED;
+            } else {
+              searchState = CAPTURED_TURN;
+              searchStateTimer = millis();
+            }
+          }
+        }
+        break;
+
+      case CAPTURED_TURN:
+        // Gira "a ciegas" un rato para no re-detectar el mismo globo de inmediato.
+        search_tz = SEARCH_YAW_RATE;
+        search_fx = 0.0;
+        if (millis() - searchStateTimer > CAPTURED_TURN_MS) {
+          Serial.println("[BUSQUEDA] Reanudando busqueda del siguiente globo.");
+          searchState = SEARCHING;
+        }
+        break;
+
+      case FINISHED:
+        // Ya encontro los 4, se detiene.
+        search_fx = 0.0;
+        search_tz = 0.0;
+        break;
+    }
+
+    behave.params[0] = cmd.params[0]; // flag = 3
+    behave.params[1] = search_fx;
+    behave.params[2] = search_fz;
+    behave.params[3] = 0;
+    // IMPORTANTE: tz aqui se manda como torque/tasa "cruda", no como angulo
+    // absoluto. Esto funciona bien mientras yawEn este en OFF (asi tz entra
+    // directo como torque constante -> giro continuo estable). Si activas
+    // yawEn, este valor se interpretaria como un ANGULO objetivo fijo y el
+    // blimp giraria hasta ahi y se detendria, no seguiria girando -> para
+    // este modo de busqueda, deja yawEn apagado.
+    behave.params[4] = (searchState == APPROACHING) ? nicla_yaw : search_tz;
+    // ========================================================================
+
+  } else { // direct control with joystick if 'flag' is not 2 ni 3
     z_estimator = cmd.params[2];
     nicla_yaw = cmd.params[4]; // autoset for when switch occurs
     forward_force = 0;

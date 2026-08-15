@@ -37,7 +37,7 @@ void NiclaConfig::loadConfiguration() {
     configData.x_strength = preferences.getFloat("x_strength", 1);
 
     configData.fx_togoal = preferences.getFloat("fx_togoal", -0.2f);
-    configData.fx_charge = preferences.getFloat("fx_charge", -0.4f);
+    configData.fx_charge = preferences.getFloat("fx_charge", 0.2f);
     configData.fx_levy = preferences.getFloat("fx_levy", -0.1f);
     configData.fz_levy = preferences.getFloat("fz_levy", 0.1f);
 
@@ -61,7 +61,7 @@ void NiclaConfig::loadConfiguration() {
     configDatab.x_strength = preferences.getFloat("bx_strength", 1);
 
     configDatab.fx_togoal = preferences.getFloat("bfx_togoal", -0.2f);
-    configDatab.fx_charge = preferences.getFloat("bfx_charge", -0.4f);
+    configDatab.fx_charge = preferences.getFloat("bfx_charge", 0.2f);
     configDatab.fx_levy = preferences.getFloat("bfx_levy", -0.1f);
     configDatab.fz_levy = preferences.getFloat("bfz_levy", 0.1f);
 

@@ -82,6 +82,11 @@
 // All possible parameters that can be stored in the flash memory of the esp32
 typedef struct feedback_t {
     bool zEn, yawEn, rollEn, pitchEn, rotateEn;
+    bool servo2Mirror;  // true (default) = formula original con "180 - x" para servo2 (asume montaje en espejo)
+                        // false = misma formula que servo1, sin espejo (para cuando el montaje real NO es en espejo)
+    float yawInvert;    // 1.0 (default) = normal, -1.0 = invierte la direccion de giro (izq/der)
+    float servo1Trim;   // ajuste fino en grados para el servo 1 (default 0)
+    float servo2Trim;   // ajuste fino en grados para el servo 2 (default 0)
     float kpyaw, kppyaw, kdyaw, kddyaw, kiyaw, kiyawrate, yawRateIntRange;
     float kpz, kdz, kiz, z_int_low, z_int_high;
     float kproll, kdroll, kppitch, kdpitch;

@@ -66,6 +66,8 @@ public:
     float yawrate_integral = 0;
     float servo_old1 = 0;
     float servo_old2 = 0;
+    float motor_power1 = 0;
+    float motor_power2 = 0;
     
 
 private:

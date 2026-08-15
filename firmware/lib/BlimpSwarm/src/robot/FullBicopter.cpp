@@ -45,6 +45,8 @@ void FullBicopter::control(float sensors[MAX_SENSORS], float controls[], int siz
     if (controls[0] == 0 ) {
         outputs[0] = 0;
         outputs[1] = 0;
+        motor_power1 = 0;
+        motor_power2 = 0;
         // Checking for full rotations and adjusting t1 and t2
         float t1 = adjustAngle(PI/2);
         float t2 = adjustAngle(PI/2);
@@ -53,7 +55,13 @@ void FullBicopter::control(float sensors[MAX_SENSORS], float controls[], int siz
         // float servoBottom = 90.0f - PDterms.servoRange/2.0f; // bottom limit of servo in degrees
         // float servoTop = 90.0f + PDterms.servoRange/2.0f; // top limit of servo in degrees
         outputs[2] = clamp((t1 ) * 180.0f / PI  + PDterms.servoBeta , 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
-        outputs[3] = 180.0f -clamp((t2) * 180.0f / PI  + PDterms.servoBeta, 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
+        if (PDterms.servo2Mirror) {
+            outputs[3] = 180.0f - clamp((t2) * 180.0f / PI  + PDterms.servoBeta, 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
+        } else {
+            outputs[3] = clamp((t2) * 180.0f / PI  + PDterms.servoBeta, 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
+        }
+        outputs[2] = clamp(outputs[2] + PDterms.servo1Trim, 0.0f, 180.0f);
+        outputs[3] = clamp(outputs[3] + PDterms.servo2Trim, 0.0f, 180.0f);
         outputs[4] = 0;
         
         return FullBicopter::actuate(outputs, size);
@@ -64,6 +72,11 @@ void FullBicopter::control(float sensors[MAX_SENSORS], float controls[], int siz
     
     outputs[4] = 1;
     FullBicopter::getOutputs(sensors, feedbackControls,  outputs);
+    // DEBUG TEMPORAL: para confirmar los angulos exactos mandados a cada servo.
+    Serial.print("DEBUG servo1=");
+    Serial.print(outputs[2]);
+    Serial.print("  servo2=");
+    Serial.println(outputs[3]);
     RawBicopter::actuate(outputs, size);
 }
 
@@ -206,7 +219,7 @@ void FullBicopter::getOutputs(float sensors[MAX_SENSORS], float controls[], floa
     //     fz = clamp(fz, 0.001, 2);
     // }
     float taux = clamp(controls[2], -l + 0.01f, l - 0.01f);
-    float tauz = clamp(controls[3], -.1, .1);
+    float tauz = clamp(controls[3], -.1, .1) * PDterms.yawInvert;
 
     // Inverse A-Matrix calculations
     float term1 = l * l * fx * fx + l * l * fz * fz + taux * taux + tauz * tauz;
@@ -232,9 +245,17 @@ void FullBicopter::getOutputs(float sensors[MAX_SENSORS], float controls[], floa
     // float servoBottom = 90.0f - PDterms.servoRange/2.0f; // bottom limit of servo in degrees
     // float servoTop = 90.0f + PDterms.servoRange/2.0f; // top limit of servo in degrees
     out[2] = clamp((t1 ) * 180.0f / PI  + PDterms.servoBeta , 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
-    out[3] = 180.0f -clamp((t2) * 180.0f / PI  + PDterms.servoBeta, 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
+    if (PDterms.servo2Mirror) {
+        out[3] = 180.0f - clamp((t2) * 180.0f / PI  + PDterms.servoBeta, 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
+    } else {
+        out[3] = clamp((t2) * 180.0f / PI  + PDterms.servoBeta, 0.0f,  PDterms.servoRange ) * 180.0f / PDterms.servoRange;
+    }
+    out[2] = clamp(out[2] + PDterms.servo1Trim, 0.0f, 180.0f);
+    out[3] = clamp(out[3] + PDterms.servo2Trim, 0.0f, 180.0f);
     out[0] = clamp(f1, 0, 1);
     out[1] = clamp(f2, 0, 1);
+    motor_power1 = out[0];
+    motor_power2 = out[1];
     if (abs(out[2] - servo_old1) < PDterms.servo_move_min) {
         out[2] = servo_old1;
     } else {
