@@ -150,10 +150,23 @@ class BlimpLink:
             if line.startswith("Telemetry") or line.startswith("I2C SCAN"):
                 print(line)
 
+    def send_control_repeated(self, mac_str: str, params: list, times: int = 4, delay: float = 0.05):
+        """Manda el mismo comando varias veces seguidas. ESP-NOW no garantiza
+        entrega (como UDP, sin confirmacion ni reintento automatico) -- si se
+        pierde el paquete de parada por interferencia/distancia, el blimp
+        nunca se entera y sigue con el ultimo comando que si recibio. Repetir
+        el envio baja mucho la probabilidad de que TODOS los intentos se
+        pierdan. Usar esto para 0/5/c (comandos de seguridad), no para todo
+        (mandarlo siempre de mas satura el canal sin necesidad).
+        """
+        for _ in range(times):
+            self.send_control(mac_str, params)
+            time.sleep(delay)
+
     def stop(self, mac_str: str):
-        self.send_control(mac_str, [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.send_control_repeated(mac_str, [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
         time.sleep(0.05)
-        self.send_control(mac_str, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.send_control_repeated(mac_str, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
     def start_autonomous_balloon(self, mac_str: str):
         """Activa el modo 'flag=2' que en main.cpp dispara el seguimiento por camara."""

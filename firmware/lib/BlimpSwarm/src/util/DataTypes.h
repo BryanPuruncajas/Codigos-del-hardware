@@ -87,6 +87,8 @@ typedef struct feedback_t {
     float yawInvert;    // 1.0 (default) = normal, -1.0 = invierte la direccion de giro (izq/der)
     float servo1Trim;   // ajuste fino en grados para el servo 1 (default 0)
     float servo2Trim;   // ajuste fino en grados para el servo 2 (default 0)
+    bool swapFxTz;      // true = intercambia fx y tz antes de calcular los angulos
+                        // (para cuando avanzar produce giro y girar produce avance)
     float kpyaw, kppyaw, kdyaw, kddyaw, kiyaw, kiyawrate, yawRateIntRange;
     float kpz, kdz, kiz, z_int_low, z_int_high;
     float kproll, kdroll, kppitch, kdpitch;

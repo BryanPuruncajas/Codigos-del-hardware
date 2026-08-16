@@ -40,6 +40,7 @@ const int TIME_STEP_MICRO = 4000;
 int dt = 1000;
 unsigned long clockTime;
 unsigned long printTime;
+unsigned long debugSendTimer = 0;
 
 int niclaOffset = 11;
 int old_flag = 0;
@@ -52,8 +53,49 @@ float forward_force = 0.0;
 enum SearchState { SEARCHING, APPROACHING, CAPTURED_TURN, FINISHED };
 SearchState searchState = SEARCHING;
 int balloonsFound = 0;
-const int TOTAL_BALLOONS = 4;
+// Memoria de direcciones (yaw) donde ya se capturo un globo, para no
+// contar/perseguir el mismo dos veces. Limitacion honesta: si dos globos
+// distintos estan casi en la misma direccion (pero a distinta distancia),
+// el sistema los puede confundir como "el mismo" -- no hay sensor de
+// posicion real (X,Y) para distinguirlos mejor que esto.
+float visitedYaws[4] = {0, 0, 0, 0};
+// Que tan cerca (en radianes) cuenta como "misma direccion ya visitada".
+// ~20 grados = 0.35 rad. Ajustar segun que tan separados esten tus globos.
+const float VISIT_MEMORY_RADIANS = 0.35;
+
+float angleDiff(float a, float b) {
+  // diferencia angular envuelta a [-PI, PI], para comparar yaws correctamente
+  // incluso cuando cruzan el limite +-180 grados.
+  float d = a - b;
+  while (d > PI) d -= 2 * PI;
+  while (d < -PI) d += 2 * PI;
+  return d;
+}
+
+bool isVisitedDirection(float currentYaw) {
+  for (int i = 0; i < balloonsFound; i++) {
+    if (abs(angleDiff(currentYaw, visitedYaws[i])) < VISIT_MEMORY_RADIANS) {
+      return true;
+    }
+  }
+  return false;
+}
+const char* searchStateName(SearchState s) {
+  switch (s) {
+    case SEARCHING: return "BUSCANDO";
+    case APPROACHING: return "ACOPLANDO";
+    case CAPTURED_TURN: return "GIRANDO_POST_CAPTURA";
+    case FINISHED: return "TERMINADO";
+  }
+  return "?";
+}
+unsigned long searchLogTimer = 0;
+bool finishAnnounced = false;
 unsigned long searchStateTimer = 0;
+// ---- Metricas de tiempo por globo ----
+unsigned long huntStartTime = 0;     // cuando empezo a buscar ESTE globo
+unsigned long approachStartTime = 0; // cuando empezo a acoplarse a ESTE globo
+const int TOTAL_BALLOONS = 4;
 
 // Que tan cerca debe verse el globo (ancho del blob en pixeles) para
 // contarlo como "capturado". AJUSTAR segun pruebas reales.
@@ -63,6 +105,17 @@ const float SEARCH_YAW_RATE = 0.35;
 // Cuanto tiempo (ms) gira "a ciegas" tras capturar, antes de volver a buscar
 // (evita re-detectar el mismo globo de inmediato)
 const unsigned long CAPTURED_TURN_MS = 2000;
+
+// ---- Patron de busqueda en espiral ascendente ----
+// Gira 360 grados completos; si no encuentra nada en esa vuelta, sube un
+// poco y vuelve a girar 360 a la nueva altura. Asi cubre distintas alturas
+// en vez de quedarse girando siempre en el mismo plano horizontal.
+bool searchHeightInitialized = false;
+float searchHeightTarget = 0;      // altura objetivo actual de la busqueda
+float searchYawAccum = 0;          // cuanto ha girado acumulado en esta vuelta
+float lastSearchYaw = 0;
+const float SEARCH_HEIGHT_STEP = 0.3;  // metros que sube cada vuelta sin encontrar nada
+const float SEARCH_HEIGHT_MAX = 2.5;   // no sigue subiendo mas alla de esto (ajustar segun tu techo)
 // ============================================================================
 
 // Forward declarations (necesarias en .cpp; en .ino el IDE las genera solo)
@@ -128,25 +181,31 @@ void loop() {
 
   // DEBUG/CALIBRACION: manda actuadores (servos + motores) y orientacion
   // completa del IMU a la base por ESP-NOW, para verlo en vivo sin USB.
-  ReceivedData actuatorDebug;
-  actuatorDebug.flag = 3;
-  actuatorDebug.values[0] = myRobot->servo_old1;   // angulo real servo 1 (grados)
-  actuatorDebug.values[1] = myRobot->servo_old2;   // angulo real servo 2 (grados)
-  actuatorDebug.values[2] = myRobot->motor_power1; // potencia motor 1 (0 a 1)
-  actuatorDebug.values[3] = myRobot->motor_power2; // potencia motor 2 (0 a 1)
-  actuatorDebug.values[4] = 0;
-  actuatorDebug.values[5] = 0;
-  baseComm->sendMeasurements(&actuatorDebug);
+  // Throttleado a ~10Hz (cada 100ms) porque mandar esto cada vuelta del loop
+  // (250Hz) saturaba la cola de ESP-NOW y los paquetes se perdian en silencio.
+  if (millis() - debugSendTimer > 100) {
+    debugSendTimer = millis();
 
-  ReceivedData orientationDebug;
-  orientationDebug.flag = 4;
-  orientationDebug.values[0] = senses[3];  // roll
-  orientationDebug.values[1] = senses[4];  // pitch
-  orientationDebug.values[2] = senses[5];  // yaw
-  orientationDebug.values[3] = senses[6];  // rollrate
-  orientationDebug.values[4] = senses[7];  // pitchrate
-  orientationDebug.values[5] = senses[8];  // yawrate
-  baseComm->sendMeasurements(&orientationDebug);
+    ReceivedData actuatorDebug;
+    actuatorDebug.flag = 3;
+    actuatorDebug.values[0] = myRobot->servo_old1;   // angulo real servo 1 (grados)
+    actuatorDebug.values[1] = myRobot->servo_old2;   // angulo real servo 2 (grados)
+    actuatorDebug.values[2] = myRobot->motor_power1; // potencia motor 1 (0 a 1)
+    actuatorDebug.values[3] = myRobot->motor_power2; // potencia motor 2 (0 a 1)
+    actuatorDebug.values[4] = 0;
+    actuatorDebug.values[5] = 0;
+    baseComm->sendMeasurements(&actuatorDebug);
+
+    ReceivedData orientationDebug;
+    orientationDebug.flag = 4;
+    orientationDebug.values[0] = senses[3];  // roll
+    orientationDebug.values[1] = senses[4];  // pitch
+    orientationDebug.values[2] = senses[5];  // yaw
+    orientationDebug.values[3] = senses[6];  // rollrate
+    orientationDebug.values[4] = senses[7];  // pitchrate
+    orientationDebug.values[5] = senses[8];  // yawrate
+    baseComm->sendMeasurements(&orientationDebug);
+  }
 
   // print sensor values every second
   // senses => [temperature, altitude, veloctity_in_altitude, roll, pitch, yaw, rollrate, pitchrate, yawrate, null, battery, nicla_flag, nicla_x, nicla_y, nicla_w, nicla_h, nicla...]
@@ -184,7 +243,7 @@ void loop() {
           float y_cal = tracking_y / terms.n_max_y;
           if ( abs(x_cal - 0.5) < terms.fx_charge){// && terms.y_strength != 0) { // makes sure yaw is in center before making height adjustments
               z_estimator =  ( _height + terms.y_strength * (y_cal - terms.y_thresh)) ; // height control doenst work well when not 0 bouyant
-              forward_force = terms.fx_togoal;
+              forward_force = -terms.fx_togoal;
           } else {
               forward_force = 0.0;
           }
@@ -209,9 +268,50 @@ void loop() {
     float nicla_w = (float)senses[niclaOffset + 4];
     bool ballVisible = (nicla_flag & 0x40) && (nicla_flag & 0b11);
 
+    // Si lo que detecta esta en una direccion ya visitada, lo ignoramos
+    // (asumimos que es el mismo globo que ya contamos, no uno nuevo).
+    if (ballVisible && isVisitedDirection(senses[5])) {
+      ballVisible = false;
+    }
+
+    // La primera vez que entra a modo busqueda, fija su altura de referencia
+    // aqui mismo (donde este en ese momento) y arranca a subir desde ahi.
+    if (!searchHeightInitialized) {
+      searchHeightInitialized = true;
+      searchHeightTarget = senses[1];
+      lastSearchYaw = senses[5];
+      searchYawAccum = 0;
+      huntStartTime = millis();
+      Serial.print("[BUSQUEDA] Altura inicial de busqueda fijada en ");
+      Serial.println(searchHeightTarget, 2);
+    }
+
     float search_fx = 0.0;
     float search_tz = 0.0;
-    float search_fz = cmd.params[2]; // altura la sigue mandando la base (usa zEn si quieres)
+    float search_fz = searchHeightTarget;  // altura la maneja la propia busqueda, no la base
+
+    // LOG periodico de estado (cada ~300ms, para no saturar la consola).
+    if (millis() - searchLogTimer > 300) {
+      searchLogTimer = millis();
+      float x_cal_log = tracking_x / terms.n_max_x;
+      Serial.print("[BUSQUEDA] estado=");
+      Serial.print(searchStateName(searchState));
+      Serial.print("  visible=");
+      Serial.print(ballVisible ? "SI" : "no");
+      Serial.print("  nicla_w=");
+      Serial.print(nicla_w, 0);
+      Serial.print("/");
+      Serial.print(CAPTURE_AREA_THRESHOLD, 0);
+      Serial.print("  centrado_x=");
+      Serial.print(x_cal_log, 2);
+      Serial.print("(0.5=centro)");
+      Serial.print("  encontrados=");
+      Serial.print(balloonsFound);
+      Serial.print("/");
+      Serial.print(TOTAL_BALLOONS);
+      Serial.print("  altura_busqueda=");
+      Serial.println(searchHeightTarget, 2);
+    }
 
     switch (searchState) {
 
@@ -219,8 +319,29 @@ void loop() {
         // Sin globo a la vista: gira lento escaneando, sin avanzar.
         search_tz = SEARCH_YAW_RATE;
         search_fx = 0.0;
+
+        // Acumula cuanto ha girado desde el ultimo ciclo (maneja el salto
+        // de +-180 grados correctamente con angleDiff).
+        searchYawAccum += abs(angleDiff(senses[5], lastSearchYaw));
+        lastSearchYaw = senses[5];
+
+        if (searchYawAccum >= 2 * PI) {
+          // Ya dio una vuelta completa sin encontrar nada: sube un poco.
+          searchYawAccum = 0;
+          if (searchHeightTarget < SEARCH_HEIGHT_MAX) {
+            searchHeightTarget += SEARCH_HEIGHT_STEP;
+            Serial.print("[BUSQUEDA] Vuelta completa, sin globo. Subiendo altura objetivo a ");
+            Serial.println(searchHeightTarget, 2);
+          } else {
+            Serial.println("[BUSQUEDA] Vuelta completa, ya en altura maxima de busqueda.");
+          }
+        }
+
         if (ballVisible) {
-          Serial.println("[BUSQUEDA] Globo detectado, pasando a ACOPLANDO.");
+          approachStartTime = millis();
+          Serial.print("[BUSQUEDA] Globo detectado tras ");
+          Serial.print((millis() - huntStartTime) / 1000.0, 1);
+          Serial.println("s buscando. Pasando a ACOPLANDO.");
           searchState = APPROACHING;
         }
         break;
@@ -240,16 +361,49 @@ void loop() {
           nicla_yaw = _yaw + des_yaw;
           float y_cal = tracking_y / terms.n_max_y;
           if (abs(x_cal - 0.5) < terms.fx_charge) {
-            search_fx = terms.fx_togoal;
+            search_fx = -terms.fx_togoal;
           } else {
             search_fx = 0.0;
           }
 
           // Si el globo se ve grande (cerca), lo contamos como capturado.
           if (nicla_w > CAPTURE_AREA_THRESHOLD) {
+            visitedYaws[balloonsFound] = senses[5];  // guarda la direccion visitada
             balloonsFound++;
-            Serial.print("[BUSQUEDA] Globo capturado! Total: ");
+
+            float timeSearching = (approachStartTime - huntStartTime) / 1000.0;
+            float timeApproaching = (millis() - approachStartTime) / 1000.0;
+            float timeTotal = (millis() - huntStartTime) / 1000.0;
+
+            Serial.print("[BUSQUEDA] Globo capturado! Direccion guardada: ");
+            Serial.print(senses[5], 2);
+            Serial.print(" rad. Total: ");
             Serial.println(balloonsFound);
+            Serial.print("[METRICAS] globo=");
+            Serial.print(balloonsFound);
+            Serial.print("  t_buscando=");
+            Serial.print(timeSearching, 1);
+            Serial.print("s  t_acoplando=");
+            Serial.print(timeApproaching, 1);
+            Serial.print("s  t_total=");
+            Serial.print(timeTotal, 1);
+            Serial.print("s  altura=");
+            Serial.print(senses[1], 2);
+            Serial.print("  nicla_w=");
+            Serial.println(nicla_w, 0);
+
+            // Manda las metricas a la base por ESP-NOW (flag=5) para
+            // guardarlas en un CSV y analizarlas despues.
+            ReceivedData captureMetrics;
+            captureMetrics.flag = 5;
+            captureMetrics.values[0] = balloonsFound;
+            captureMetrics.values[1] = timeSearching;
+            captureMetrics.values[2] = timeApproaching;
+            captureMetrics.values[3] = senses[1];   // altura al capturar
+            captureMetrics.values[4] = senses[5];   // yaw al capturar
+            captureMetrics.values[5] = nicla_w;     // tamano del blob al capturar
+            baseComm->sendMeasurements(&captureMetrics);
+
             if (balloonsFound >= TOTAL_BALLOONS) {
               searchState = FINISHED;
             } else {
@@ -265,6 +419,7 @@ void loop() {
         search_tz = SEARCH_YAW_RATE;
         search_fx = 0.0;
         if (millis() - searchStateTimer > CAPTURED_TURN_MS) {
+          huntStartTime = millis();
           Serial.println("[BUSQUEDA] Reanudando busqueda del siguiente globo.");
           searchState = SEARCHING;
         }
@@ -274,6 +429,12 @@ void loop() {
         // Ya encontro los 4, se detiene.
         search_fx = 0.0;
         search_tz = 0.0;
+        if (!finishAnnounced) {
+          finishAnnounced = true;
+          Serial.println("=========================================");
+          Serial.println("[BUSQUEDA] MISION COMPLETA: 4/4 globos encontrados!");
+          Serial.println("=========================================");
+        }
         break;
     }
 
@@ -314,6 +475,17 @@ void recieveCommands(){
     cmd = baseComm->receiveMsgCmd();
     if (int(cmd.params[11]) == 1){
       paramUpdate();
+    }
+    if (int(cmd.params[12]) == 1){
+      // Reset por software del contador de globos y la memoria de
+      // direcciones visitadas, sin necesitar reiniciar el ESP32 fisico.
+      balloonsFound = 0;
+      for (int i = 0; i < 4; i++) visitedYaws[i] = 0;
+      searchState = SEARCHING;
+      finishAnnounced = false;
+      searchHeightInitialized = false;  // vuelve a fijar la altura de referencia
+      searchYawAccum = 0;
+      Serial.println("[BUSQUEDA] Reset manual: contador, memoria y altura a cero.");
     }
     // Print command
     Serial.print("Cmd arrived: ");

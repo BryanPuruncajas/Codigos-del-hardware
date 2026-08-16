@@ -226,6 +226,22 @@ void onDataReceive(const uint8_t *mac, const uint8_t *incomingData, int data_len
             Serial.print(latestReceivedData.values[4], 2);
             Serial.print("  yawrate=");
             Serial.println(latestReceivedData.values[5], 2);
+        } else if (latestReceivedData.flag == 5) {
+            // Metricas de captura de un globo (ver main.cpp del blimp).
+            // Formato pensado para que interactive_control.py lo parsee
+            // facil y lo guarde en un CSV.
+            Serial.print("Telemetry-Metricas globo=");
+            Serial.print((int)latestReceivedData.values[0]);
+            Serial.print(" t_buscando=");
+            Serial.print(latestReceivedData.values[1], 2);
+            Serial.print(" t_acoplando=");
+            Serial.print(latestReceivedData.values[2], 2);
+            Serial.print(" altura=");
+            Serial.print(latestReceivedData.values[3], 2);
+            Serial.print(" yaw=");
+            Serial.print(latestReceivedData.values[4], 2);
+            Serial.print(" nicla_w=");
+            Serial.println(latestReceivedData.values[5], 2);
         }
     } else {
         //Serial.println("Error: Invalid flag received.");

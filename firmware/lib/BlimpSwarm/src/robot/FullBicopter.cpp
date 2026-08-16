@@ -221,6 +221,15 @@ void FullBicopter::getOutputs(float sensors[MAX_SENSORS], float controls[], floa
     float taux = clamp(controls[2], -l + 0.01f, l - 0.01f);
     float tauz = clamp(controls[3], -.1, .1) * PDterms.yawInvert;
 
+    if (PDterms.swapFxTz) {
+        // Intercambia fx y tauz -- para cuando "avanzar" produce giro y
+        // "girar" produce avance (los dos comandos estan cruzados en la
+        // practica, aunque el codigo los etiquete bien por separado).
+        float tmp = fx;
+        fx = tauz;
+        tauz = tmp;
+    }
+
     // Inverse A-Matrix calculations
     float term1 = l * l * fx * fx + l * l * fz * fz + taux * taux + tauz * tauz;
     float term2 = 2 * fz * l * taux - 2 * fx * l * tauz;

@@ -81,6 +81,7 @@ void RawBicopter::getPreferences() {
     PDterms.yawInvert = preferences.getFloat("yawInvert", 1.0);
     PDterms.servo1Trim = preferences.getFloat("servo1Trim", 0.0);
     PDterms.servo2Trim = preferences.getFloat("servo2Trim", 0.0);
+    PDterms.swapFxTz = preferences.getBool("swapFxTz", false);
     PDterms.pitchOffset = preferences.getFloat("pitchOffset", 0);
     PDterms.pitchInvert = preferences.getFloat("pitchInvert", 1);
     PDterms.servo_move_min = preferences.getFloat("servo_move_min", 2); // degrees

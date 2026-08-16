@@ -14,6 +14,9 @@ Corre:
 import sys
 import time
 import msvcrt
+import csv
+import re
+from datetime import datetime
 
 from simple_control import BlimpLink
 from user_parameters import ROBOT_MACS
@@ -28,6 +31,7 @@ state = {
     "yawInvert": False,
     "servo1Trim": 0.0,
     "servo2Trim": 0.0,
+    "swapFxTz": False,
     "mode": 0,       # 0 = manual/neutro, 2 = autonomo (Nicla)
     "show_telemetry": True,
 }
@@ -41,8 +45,8 @@ MENU = """
   [c]  Encerar/centrar servos (misma accion que [0], mas explicito)
 
   --- Movimiento manual (empujon corto de 0.5s con flag=1, luego vuelve a [0]) ---
-  [i]  Avanzar (fx)          [k]  Retroceder (fx)
-  [j]  Girar izquierda (tz)  [l]  Girar derecha (tz)
+  [i]  Avanzar (fx)          [k]  Retroceder (fx)      [requiere S=ON]
+  [j]  Girar izquierda (tz)  [l]  Girar derecha (tz)   [requiere S=ON]
   [u]  Subir (fz)            [o]  Bajar (fz)
   [U]  SUBIR SOSTENIDO (no se apaga solo, usa [0] o [5] para parar)
   [H]  Setear ALTURA OBJETIVO especifica (activa zEn, pide el valor, sostenido)
@@ -55,6 +59,9 @@ MENU = """
   [N]  Toggle yawInvert (invierte giro izq/der) -> {yawInvert}
   [ [ ] / [ ] ]  Servo1 trim -5 / +5 grados   -> {servo1Trim}
   [ - ] / [ = ]  Servo2 trim -5 / +5 grados   -> {servo2Trim}
+  [S]  Toggle swapFxTz (intercambia avance/giro) -> {swapFxTz}
+  [P]  Setear CUALQUIER parametro (pide nombre, tipo, valor)
+  [R]  Reset del contador de busqueda (globos encontrados + memoria)
 
   [t]  Toggle mostrar telemetria en vivo     -> {show_telemetry}
   [m]  Mostrar este menu de nuevo
@@ -78,6 +85,49 @@ def nudge(link, mac, fx=0.0, fz=0.0, tz=0.0, duration=NUDGE_DURATION):
     link.send_control(mac, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
 
+METRICS_CSV_PATH = "busqueda_metricas.csv"
+METRICS_CSV_HEADER = ["timestamp", "globo", "t_buscando_s", "t_acoplando_s",
+                      "t_total_s", "altura", "yaw", "nicla_w"]
+
+
+def init_metrics_csv():
+    """Crea el CSV con encabezado si todavia no existe."""
+    try:
+        with open(METRICS_CSV_PATH, "x", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(METRICS_CSV_HEADER)
+        print(f">> Creado {METRICS_CSV_PATH} para guardar metricas de captura.")
+    except FileExistsError:
+        pass  # ya existe, se le sigue agregando (append)
+
+
+def log_metrics_line(line: str):
+    """Parsea una linea 'Telemetry-Metricas globo=N t_buscando=X ...' y la
+    agrega como fila nueva al CSV, para analizarla despues (Excel/pandas).
+    """
+    nums = dict(re.findall(r"(\w+)=(-?[\d.]+)", line))
+    try:
+        globo = int(float(nums.get("globo", -1)))
+        t_buscando = float(nums.get("t_buscando", 0))
+        t_acoplando = float(nums.get("t_acoplando", 0))
+        altura = float(nums.get("altura", 0))
+        yaw = float(nums.get("yaw", 0))
+        nicla_w = float(nums.get("nicla_w", 0))
+    except ValueError:
+        print(">> No se pudo parsear la linea de metricas, se ignora.")
+        return
+
+    t_total = t_buscando + t_acoplando
+    with open(METRICS_CSV_PATH, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.now().isoformat(timespec="seconds"),
+            globo, t_buscando, t_acoplando, t_total, altura, yaw, nicla_w,
+        ])
+    print(f">> Metrica guardada en {METRICS_CSV_PATH}: globo {globo}, "
+          f"total {t_total:.1f}s")
+
+
 def print_menu():
     print(MENU.format(
         yawEn="ON" if state["yawEn"] else "off",
@@ -88,6 +138,7 @@ def print_menu():
         yawInvert="ON" if state["yawInvert"] else "off",
         servo1Trim=state["servo1Trim"],
         servo2Trim=state["servo2Trim"],
+        swapFxTz="ON" if state["swapFxTz"] else "off",
         show_telemetry="ON" if state["show_telemetry"] else "off",
     ))
 
@@ -100,6 +151,8 @@ def main():
     if not ROBOT_MACS:
         raise SystemExit("Pon la MAC de tu blimp en user_parameters.py (ROBOT_MACS).")
     mac = ROBOT_MACS[0]
+
+    init_metrics_csv()
 
     link = BlimpLink()
 
@@ -176,6 +229,30 @@ def main():
                     reload_prefs(link, mac)
                     print(f">> servo2Trim = {state['servo2Trim']}")
 
+                elif key_raw == "S":
+                    state["swapFxTz"] = not state["swapFxTz"]
+                    link.set_bool(mac, "swapFxTz", state["swapFxTz"])
+                    reload_prefs(link, mac)
+                    print(f">> swapFxTz = {state['swapFxTz']}")
+
+                elif key_raw == "P":
+                    name = input(">> Nombre del parametro (ej. kpz, kdyaw, x_strength): ").strip()
+                    tipo = input(">> Tipo (f=float, b=bool): ").strip().lower()
+                    if tipo == "b":
+                        val_str = input(">> Valor (true/false, 1/0): ").strip().lower()
+                        val = val_str in ("true", "1", "on", "si", "yes")
+                        link.set_bool(mac, name, val)
+                    else:
+                        try:
+                            val = float(input(">> Valor (numero): "))
+                            link.set_float(mac, name, val)
+                        except ValueError:
+                            print(">> Valor invalido, cancelado.")
+                            val = None
+                    if val is not None:
+                        reload_prefs(link, mac)
+                        print(f">> {name} = {val}")
+
                 elif key == "2":
                     state["mode"] = 2
                     link.send_control(mac, [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
@@ -186,10 +263,14 @@ def main():
                     link.send_control(mac, [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
                     print(">> Modo BUSQUEDA AUTONOMA activado (busca 4 globos).")
 
+                elif key_raw == "R":
+                    link.send_control(mac, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+                    print(">> Reset de busqueda enviado (contador y memoria a cero).")
+
                 elif key == "0":
                     state["mode"] = 0
-                    link.send_control(mac, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-                    print(">> Modo MANUAL activado.")
+                    link.send_control_repeated(mac, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+                    print(">> Modo MANUAL activado (APAGADO).")
 
                 elif key == "5":
                     link.stop(mac)
@@ -197,23 +278,23 @@ def main():
                     print(">> STOP enviado.")
 
                 elif key == "c":
-                    link.send_control(mac, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+                    link.send_control_repeated(mac, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
                     print(">> Servos centrados (flag=0, motores a cero).")
 
                 elif key == "i":
-                    print(">> Avanzando (empujon largo)...")
+                    print(">> Avanzando (empujon largo)... [requiere S activado]")
                     nudge(link, mac, fx=NUDGE_MAGNITUDE, duration=NUDGE_DURATION_LONG)
 
                 elif key == "k":
-                    print(">> Retrocediendo (empujon corto)...")
+                    print(">> Retrocediendo (empujon corto)... [requiere S activado]")
                     nudge(link, mac, fx=-NUDGE_MAGNITUDE)
 
                 elif key == "j":
-                    print(">> Girando izquierda (empujon corto)...")
+                    print(">> Girando izquierda (empujon corto)... [requiere S activado]")
                     nudge(link, mac, tz=-NUDGE_MAGNITUDE)
 
                 elif key == "l":
-                    print(">> Girando derecha (empujon corto)...")
+                    print(">> Girando derecha (empujon corto)... [requiere S activado]")
                     nudge(link, mac, tz=NUDGE_MAGNITUDE)
 
                 elif key == "u":
@@ -263,6 +344,8 @@ def main():
             # --- mientras tanto, muestra telemetria si llega algo (no bloqueante) ---
             if link.ser.in_waiting:
                 line = link.ser.readline().decode(errors="ignore").strip()
+                if line.startswith("Telemetry-Metricas"):
+                    log_metrics_line(line)  # siempre se guarda, aunque telemetria este oculta
                 if state["show_telemetry"] and (line.startswith("Telemetry") or line.startswith("I2C SCAN")):
                     print(line)
 
