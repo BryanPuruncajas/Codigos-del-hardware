@@ -21,7 +21,7 @@ void SensorSuite::startup() {
     bnoSensor.startup();
     barometer.startup();
     batterySensor.startup();
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < 11; i++) {
         sensorValues[i] = 0;
     }
 }
@@ -62,21 +62,11 @@ bool SensorSuite::update() {
         offset += tempCount;
         updated = true;
     }
-    offset = 11; 
+    // Sin ultrasonico: SensorSuite termina en indice 10 (11 valores).
+    // La Nicla se concatena inmediatamente a partir del indice 11.
+    offset = 11;
 
-    if (ultrasonicSensor.readDistance() != 0xFFFF) {  // Check for valid reading
-        sensorValues[offset] = ultrasonicSensor.readDistance();  // Store the distance value
-        offset += 1;
-        updated = true;
-    }
-    // If the ultrasonic sensor is not working, then the value is set to 999
-    else {
-        sensorValues[offset] = 999;
-        offset += 1;
-        updated = true;
-    }
-
-    valueCount = offset; // Update the total number of valid sensor values stored
+    valueCount = offset; // 11 valores base
     return updated;
 }
 

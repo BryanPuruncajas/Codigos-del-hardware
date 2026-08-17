@@ -18,8 +18,9 @@
 #include <IBusBM.h>
 #include <Arduino.h>
 
-#define BALL_DET 0x80
-#define GOAL_DET 0x81
+#define BALL_DET 0x40
+#define GOAL_DET 0x80
+#define GOAL_ORANGE_DET 0x81
 
 class Nicla : public SensorInterface {
 public:
@@ -72,7 +73,7 @@ public:
 
 private:
     float value[10]; // Array to store the values returned by Nicla Vision
-    uint8_t mode = GOAL_DET; // Default mode the Nicla Vision will start at
+    uint8_t mode = BALL_DET; // Default mode the Nicla Vision will start at
     unsigned long sendTime;
 };
 

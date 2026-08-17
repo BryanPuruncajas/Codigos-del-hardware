@@ -48,11 +48,8 @@ RobotState *LevyWalk::statetransitions(float sensors[], float controls[]) {
 
         RobotState *moveToGoal = new MoveToGoal();
         return moveToGoal;
-    } else if (sensors[11] < terms.wall_thresh) {
-        // Wall detected, initiate turn
-        wallDetected = true;
-        turn_start_yaw = sensors[5]; // Store current yaw
-        return this;                 // Stay in LevyWalk state, but with wall avoidance active
+    // Sin ultrasonico en el hardware actual: se elimina la condicion de evitacion de pared.
+    // El indice 11 ahora pertenece a NICLA_FLAG y NO debe interpretarse como distancia.
     } else if (millis() - hist->start_ball_time > terms.time_in_mode * 1000) {
         // If the robot has been in LevyWalk state for more than the designated time
         hist->num_captures = 0;

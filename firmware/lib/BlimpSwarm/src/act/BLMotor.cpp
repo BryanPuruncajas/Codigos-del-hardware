@@ -1,77 +1,71 @@
-/**
- * @file BLMotor.cpp
- * @author David Saldana
- * @brief Implementation of BLMotor.h
- * @version 0.1
- * @date 2024-02-09
- * 
- * @copyright Copyright (c) 2024
- * 
- */
-
 #include "BLMotor.h"
 #include <Arduino.h>
 
-
-
-BLMotor::BLMotor(int minVal, int maxVal, int offsetVal, int pinVal, int periodHertz)
-        : Actuator(minVal, maxVal, offsetVal, pinVal) {
-    // Additional initialization specific to SpecificActuator
-    this->period_hertz = periodHertz;
-    pinMode(this->pin, OUTPUT);
-
-    this->thrust.attach(this->pin, this->min, this->max);
-    this->thrust.setPeriodHertz(this->period_hertz);
+BLMotor::BLMotor(int minVal,int maxVal,int offsetVal,int pinVal,int periodHertz)
+: Actuator(minVal,maxVal,offsetVal,pinVal), period_hertz(periodHertz) {
+    // IMPORTANTE PARA ESTOS ESC:
+    // El firmware heredado mantenia PWM presente desde startup. Dejarlos en
+    // INPUT/detach hace que algunos ESC arranquen pitando por "no signal" y
+    // luego no acepten correctamente potencia aunque el software diga ARMED.
+    //
+    // Conservamos el safe boot de forma logica: PWM SI existe, pero queda
+    // clavado en throttle minimo hasta un ARM explicito.
+    pinMode(this->pin,OUTPUT);
+    thrust.attach(this->pin,this->min,this->max);
+    thrust.setPeriodHertz(this->period_hertz);
+    thrust.writeMicroseconds(this->min);
+    enabled=false;
 }
 
 BLMotor::BLMotor(int pinVal)
-        : Actuator(1100, 2000, 0, pinVal) {
-    // Additional initialization specific to SpecificActuator
-    pinMode(pinVal, OUTPUT);
-    this->thrust.attach(this->pin, this->min, this->max);
-    this->thrust.setPeriodHertz(50);
+: Actuator(1100,2000,0,pinVal), period_hertz(50) {
+    pinMode(this->pin,OUTPUT);
+    thrust.attach(this->pin,this->min,this->max);
+    thrust.setPeriodHertz(this->period_hertz);
+    thrust.writeMicroseconds(this->min);
+    enabled=false;
 }
 
+void BLMotor::setPowerLimit(float limit){
+    powerLimit=constrain(limit,0.0f,1.0f);
+}
+
+void BLMotor::enable(){
+    if(enabled) return;
+
+    // El PWM ya esta conectado desde el constructor. Antes de habilitar
+    // comandos distintos de cero reafirmamos throttle minimo.
+    thrust.writeMicroseconds(this->min);
+    enabled=true;
+}
+
+void BLMotor::disable(){
+    // NO detach: el ESC debe seguir viendo una senal valida de throttle bajo.
+    // La seguridad se mantiene porque act() ignora cualquier potencia mientras
+    // enabled == false.
+    thrust.writeMicroseconds(this->min);
+    enabled=false;
+}
 
 void BLMotor::act(float value){
-    value = constrain(value, 0, 1);
+    if(!enabled) return;
 
-    // Force to PWM
-    float force = value * (max_thrust - min_thrust) + min_thrust;
-    int pwm = (int) ((force - pwm_b) / pwm_a);
-    this->thrust.writeMicroseconds(pwm);
+    value=constrain(value,0.0f,powerLimit);
+
+    // Conversion EXACTA heredada: value 0..1 -> fuerza 0..35 g -> PWM.
+    // Con las constantes originales: 0% ~= 1100 us y 100% ~= 1927 us.
+    float force=value*(max_thrust-min_thrust)+min_thrust;
+    int pwm=(int)((force-pwm_b)/pwm_a);
+    pwm=constrain(pwm,this->min,this->max);
+    thrust.writeMicroseconds(pwm);
 }
-
-
-
-void BLMotor::calibrate(){
-
-    delay(1000);
-    Serial.println("Calibrating ESCs....");
-    thrust.writeMicroseconds(this->max);
-    delay(8000);
-
-    // Back to minimum value
-    thrust.writeMicroseconds(this->min);
-    delay(8000);
-    thrust.writeMicroseconds(0);
-    delay(1000);
-    Serial.println("Calibration completed");
-}
-
 
 void BLMotor::arm(){
-// ESC arming sequence for BLHeli S
-    thrust.writeMicroseconds(this->min);
-    delay(10);
-
-    // Sweep up
-    for (int i = 1050; i < 1500; i++)
-    {
-        thrust.writeMicroseconds(i);
-        delay(6);
-    }
-
-    thrust.writeMicroseconds(1000);
+    enable();
+    act(0.0f);
     delay(1000);
+}
+
+void BLMotor::calibrate(){
+    Serial.println("[SAFE] calibrate() no se ejecuta automaticamente.");
 }

@@ -9,7 +9,7 @@
 #include "GY_US42V2.h"  // Include the header file
 
 // Constructor implementation
-GY_US42V2::GY_US42V2(uint8_t address) : sensorAddress(address) {
+GY_US42V2::GY_US42V2(uint8_t address) : sensorAddress(address), bufferIndex(0) {
     Wire.begin();  // Initialize the I2C bus
     delay(100);
     for (int i = 0; i < 3; ++i) {

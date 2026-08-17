@@ -18,7 +18,7 @@
 class Robot {
     public:
         // Assume a fixed maximum size for the arrays
-        static const int MAX_SENSORS = 22;
+        static const int MAX_SENSORS = 21;
 
         /**
          * @brief Function for retrieving sensor values

@@ -14,7 +14,7 @@ void NiclaSuite::startup() {
     NiclaSuite::getPreferences();
     nicla.startup();
     sensorSuite.startup();
-    for (int i = 0; i < 22; i++) {  // 22 = 21 (sensorSuite+nicla) + 1 (ultrasonicSensor)
+    for (int i = 0; i < 21; i++) {  // 11 SensorSuite + 10 Nicla Vision
         sensorValues[i] = 0;
     }
 }

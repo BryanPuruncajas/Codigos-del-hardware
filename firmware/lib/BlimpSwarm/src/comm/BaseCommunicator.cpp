@@ -68,16 +68,14 @@ void BaseCommunicator::pingStations() {
 
 
 bool BaseCommunicator::sendMeasurements(ReceivedData* measurements){
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) {
-        // Save the last time you executed the code
-        previousMillis = currentMillis;
-
-        // Place the code you want to run at a rate of 5 times per second here
-        comm->sendData(this->main_station_mac,(uint8_t *) measurements, sizeof(ReceivedData));
-        return true;
-    }
-    return false;  //fixme ??
+    if (!measurements) return false;
+    int idx = measurements->flag;
+    if (idx < 0 || idx >= MAX_TELEMETRY_FLAGS) idx = 0;
+    unsigned long now = millis();
+    if (now - previousMillisByFlag[idx] < interval) return false;
+    previousMillisByFlag[idx] = now;
+    comm->sendData(this->main_station_mac,(uint8_t*)measurements,sizeof(ReceivedData));
+    return true;
 }
 
 

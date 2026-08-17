@@ -1,3 +1,4 @@
+# Configuración local. Ajusta COM y MAC antes de ejecutar run_test.py.
 ##### Insert your robot's MAC ADDRESS here ####
 ## (you can get it by running your arduino and looking at the serial monitor for your flying drone) ##
 

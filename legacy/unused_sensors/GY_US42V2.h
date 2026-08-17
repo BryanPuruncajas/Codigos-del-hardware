@@ -24,7 +24,7 @@ private:
     static const uint8_t RANGE_COMMAND = 0x51;  // Command to start a ranging cycle in cm
     static const uint8_t READ_BYTES = 2;  // Number of bytes to read from the sensor
     uint16_t distanceBuffer[3];
-    uint8_t bufferIndex;
+    uint8_t bufferIndex = 0;
 };
 
 #endif // GY_US42V2_H  // End of include guard

@@ -87,8 +87,9 @@ private:
     int numPingStations = 0; // Number of ping stations currently added
     Preferences preferences;
 
-    unsigned long previousMillis = 0; // Stores the last time a message was sent
-    const long interval = 333; // Interval at which to run the sender (milliseconds) //TODO make SSD
+    static const int MAX_TELEMETRY_FLAGS = 16;
+    unsigned long previousMillisByFlag[MAX_TELEMETRY_FLAGS] = {0};
+    const unsigned long interval = 100; // 10 Hz POR FLAG; evita que flag=1 bloquee 3/4/5
 
     // Messages
     ControlInput* msgCmd;

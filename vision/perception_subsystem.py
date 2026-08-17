@@ -1910,7 +1910,7 @@ def mode_initialization(input_mode, mode, grid=None, detectors=None):
 if __name__ == "__main__":
     # Necessary for both modes
     clock = time.clock()
-    mode = 0 # 0 for balloon detection and 1 for goal
+    mode = 0 # 0 balloon, 1 goal. UART: 0x40->balloon, 0x80/0x81->goal
 
     # Initialize inter-board communication
     # time of flight sensor initialization

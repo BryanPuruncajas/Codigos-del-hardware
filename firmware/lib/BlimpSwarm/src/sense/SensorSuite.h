@@ -16,7 +16,6 @@
 #include "Barometer390.h"
 #include "BNO85.h"
 #include "BatterySensor.h"
-#include "GY_US42V2.h"
 
 class SensorSuite : public SensorInterface {
 public:
@@ -49,9 +48,9 @@ private:
     Barometer barometer;
     BNO85 bnoSensor;
     WeightedBatterySensor batterySensor;
-    GY_US42V2 ultrasonicSensor; 
-
-    float sensorValues[16]; // Adjust based on actual data size needed
+    // Sensores activos: BMP390 + BNO085/BNO086 + monitor de bateria D8.
+    // No hay sensor ultrasonico instalado en esta version de la tesis.
+    float sensorValues[11];
     int valueCount; // Keep track of the total number of values stored
 };
 

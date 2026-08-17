@@ -141,7 +141,7 @@ typedef struct {
     float forward_force = 0;
     int nicla_flag = 0x80;
     int target_color = 0x80;
-    bool nicla_desired = 1;
+    bool nicla_desired = 0;
     int num_captures = 0;
     int goal_direction = 1;
     unsigned long start_ball_time;

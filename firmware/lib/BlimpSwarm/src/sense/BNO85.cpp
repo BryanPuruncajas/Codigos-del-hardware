@@ -17,6 +17,10 @@ BNO85::BNO85() {
 }
 
 void BNO85::startup() {
+    // PCB tesis: D2 es RST hardware del BNO. Mantenerlo HIGH antes de I2C.
+    pinMode(D2, OUTPUT);
+    digitalWrite(D2, HIGH);
+    delay(50);
     // if (bnoOn) return;
     BNO85::getPreferences();
     if (bnoOn){

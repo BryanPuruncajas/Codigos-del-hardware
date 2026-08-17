@@ -72,11 +72,6 @@ void FullBicopter::control(float sensors[MAX_SENSORS], float controls[], int siz
     
     outputs[4] = 1;
     FullBicopter::getOutputs(sensors, feedbackControls,  outputs);
-    // DEBUG TEMPORAL: para confirmar los angulos exactos mandados a cada servo.
-    Serial.print("DEBUG servo1=");
-    Serial.print(outputs[2]);
-    Serial.print("  servo2=");
-    Serial.println(outputs[3]);
     RawBicopter::actuate(outputs, size);
 }
 
@@ -178,6 +173,8 @@ void FullBicopter::addFeedback(float sensors[MAX_SENSORS], float controls[], flo
     }
 
     // Pitch feedback
+    // NOTA P03: la base heredada usa sensors[3]/[6] aqui aunque SensorSuite los nombra roll/rollrate.
+    // Se conserva hasta validar fisicamente la convencion en las pruebas; no corregir a ciegas.
     if (PDterms.pitchEn) { 
         // Serial.println("roll feedback");
         fx = fx - sensors[3]*PDterms.kppitch - sensors[6] * PDterms.kdpitch; // Pitch - PitchRate
@@ -261,8 +258,8 @@ void FullBicopter::getOutputs(float sensors[MAX_SENSORS], float controls[], floa
     }
     out[2] = clamp(out[2] + PDterms.servo1Trim, 0.0f, 180.0f);
     out[3] = clamp(out[3] + PDterms.servo2Trim, 0.0f, 180.0f);
-    out[0] = clamp(f1, 0, 1);
-    out[1] = clamp(f2, 0, 1);
+    out[0] = clamp(f1, 0, getMotorPowerLimit());
+    out[1] = clamp(f2, 0, getMotorPowerLimit());
     motor_power1 = out[0];
     motor_power2 = out[1];
     if (abs(out[2] - servo_old1) < PDterms.servo_move_min) {

@@ -1,39 +1,15 @@
-/**
- * @file AServo.cpp
- * @author David Saldana
- * @brief Implementation of Aservo.h
- * @version 0.1
- * @date 2024-02-09
- * 
- * @copyright Copyright (c) 2024
- * 
- */
-
 #include "AServo.h"
-
-
-
-AServo::AServo(int minVal, int maxVal, int offsetVal, int pinVal, int periodHertz): Actuator(minVal, maxVal, offsetVal, pinVal) {
-    // Additional initialization specific to servos
-    this->period_hertz = periodHertz;
-    pinMode(this->pin, OUTPUT);
-    servo.attach(this->pin, this->min, this->max);
-    servo.setPeriodHertz(this->period_hertz);
+#include <Arduino.h>
+AServo::AServo(int minVal,int maxVal,int offsetVal,int pinVal,int periodHertz)
+:Actuator(minVal,maxVal,offsetVal,pinVal),period_hertz(periodHertz){ pinMode(this->pin,INPUT); }
+AServo::AServo(int pinVal):Actuator(550,2450,0,pinVal),period_hertz(50){ pinMode(this->pin,INPUT); }
+void AServo::enable(){
+    if(enabled) return;
+    pinMode(this->pin,OUTPUT);
+    servo.attach(this->pin,this->min,this->max);
+    servo.setPeriodHertz(period_hertz);
+    enabled=true;
 }
-
-AServo::AServo(int pinVal): Actuator(550, 2450, 0, pinVal) {
-    // Additional initialization specific to servos
-    pinMode(this->pin, OUTPUT);
-    servo.attach(this->pin, this->min, this->max);
-    servo.setPeriodHertz(50); // Standard 50hz servo
-}
-
-
-void AServo::act(float value){
-    //TODO the input should be force. We should use the calibration parameters
-    //TODO the thrust is related to angular velocity
-    int angle = constrain(value, 0, 180) ; // cant handle values between PI and 2PI
-    servo.write((int) angle);
-//    int val = constrain(value, 0, 1);
-//    this->thrust.writeMicroseconds((int)((val) * (this->max - this->min) + this->min));
-}
+void AServo::disable(){ if(enabled) servo.detach(); pinMode(this->pin,INPUT); enabled=false; }
+void AServo::act(float value){ if(!enabled) return; servo.write((int)constrain(value,0.0f,180.0f)); }
+void AServo::actMicroseconds(int pulseUs){ if(!enabled) return; servo.writeMicroseconds(constrain(pulseUs,this->min,this->max)); }
