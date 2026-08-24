@@ -12,7 +12,7 @@ void RawBicopter::startup(){
     servo1=new AServo(SERVO1);
     servo2=new AServo(SERVO2);
     motor1=new BLMotor(1100,2000,0,THRUST1,55);
-    motor2=new BLMotor(1100,2000,0,THRUST2,58);
+    motor2=new BLMotor(1100,2000,0,THRUST2,55);
     led=new LED(LED_BUILTIN);
 
     ESP32PWM::allocateTimer(0);

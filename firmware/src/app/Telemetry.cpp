@@ -20,10 +20,22 @@ void sendCore(AppContext& ctx) {
         ctx.sensors[SensorMap::BATTERY], ctx.sensors[SensorMap::VERTICAL_VELOCITY]);
 }
 void sendNicla(AppContext& ctx) {
+    // La Nicla manda DOS pares de coordenadas por trama:
+    //
+    //   NICLA_X / Y / W / H              -> ROI de SEGUIMIENTO
+    //   NICLA_X_VALUE / Y_ / W_ / H_     -> DETECCION real del objeto
+    //
+    // El ROI es la ventana de busqueda del tracker: crece y encoge por su
+    // propia logica, es cuadrada por construccion (por eso W y H salian
+    // siempre identicos) y no representa al globo. Medido el 23/08 con el
+    // globo INMOVIL: NICLA_W recorria de 38 a 219 px y NICLA_X de 5 a 132.
+    //
+    // Aqui se envian los valores de DETECCION, que es lo que hay que usar
+    // para centrar (P07) y para decidir si un globo esta visitado (P08+).
     send(ctx.comm, 2,
-        ctx.sensors[SensorMap::NICLA_FLAG], ctx.sensors[SensorMap::NICLA_X],
-        ctx.sensors[SensorMap::NICLA_Y], ctx.sensors[SensorMap::NICLA_W],
-        ctx.sensors[SensorMap::NICLA_H], ctx.sensors[SensorMap::NICLA_DISTANCE]);
+        ctx.sensors[SensorMap::NICLA_FLAG], ctx.sensors[SensorMap::NICLA_X_VALUE],
+        ctx.sensors[SensorMap::NICLA_Y_VALUE], ctx.sensors[SensorMap::NICLA_W_VALUE],
+        ctx.sensors[SensorMap::NICLA_H_VALUE], ctx.sensors[SensorMap::NICLA_DISTANCE]);
 }
 void sendActuators(AppContext& ctx) {
     send(ctx.comm, 3,

@@ -1,198 +1,279 @@
 #include "tests/TestRunners.h"
 #include "app/AppConfig.h"
+#include "app/ControlCommon.h"
 #include "app/SensorMap.h"
 #include "app/Telemetry.h"
 #include <Arduino.h>
 #include <math.h>
-
+#include <stdint.h>
+ 
+// ============================================================================
+// P04 v2  -  ALTURA AISLADA, MISMO LAZO QUE P05
+//
+// QUE CAMBIO Y POR QUE
+// --------------------
+// El P04 anterior ya tenia la misma FORMA que el lazo de altura de P05
+// (kp*error + I - kd*vz, mismo deadband, misma zona integral, mismo filtro
+// de vz), pero se comportaba distinto en tres puntos que arruinaban la
+// transferencia de ganancias:
+//
+//  1) EL TOPE DEL INTEGRAL ESTABA CLAVADO EN 6%  (ALT_I_POWER_MAX = 0.06).
+//     P05 lo tiene en maxPower. Si tu potencia de hover es, por ejemplo, 9%,
+//     en P04 el integral se saturaba en 6% y el blimp se quedaba colgado
+//     debajo del setpoint hasta que kp*error completara la diferencia.
+//     Eso da un error permanente de (hover - 0.06)/kp que NO es culpa de la
+//     sintonia: es el clamp. Ahora el tope es maxPower en los dos tests.
+//
+//  2) NO TENIA ANTI-WINDUP. El integral cargaba incluso con la salida
+//     saturada y contra el limite de slew, asi que el transitorio mentia
+//     respecto de lo que hara P05.
+//
+//  3) NO TENIA PISO DE POTENCIA (amin). P05 si. Ahora los dos lo tienen y es
+//     configurable. RECOMENDACION: dejalo en 0 mientras sintonizas, porque un
+//     piso alto se traga el termino proporcional y convierte el lazo en un
+//     rele de dos estados que parece estable pero no esta sintonizado.
+//
+// Como los servos se quedan siempre en el vector vertical (35/85), etaZ = 1 y
+// la demanda de empuje es identica a la potencia de motor. Por eso este test
+// es el banco limpio para sacar kp/ki/kd: sin yaw, sin mixer, sin acoplamiento.
+//
+//
+// SLOTS DE ControlInput
+// ---------------------
+//   FZ    : referencia de altura en metros
+//   AUX0  : alt Kp
+//   AUX1  : alt Ki
+//   AUX2  : alt Kd
+//   AUX3  : ALT_PACK (min, max, slew, banda de exito)
+//   AUX4  : reservado
+// ============================================================================
+ 
 namespace {
-
-// Vector vertical fisicamente validado.
-constexpr float SERVO1_Z_DEG = 35.0f;
-constexpr float SERVO2_Z_DEG = 85.0f;
-
-// Valores por defecto. Se pueden sobreescribir desde run_test.py:
-// --kp, --ki, --kd, --max-power, --slew
-constexpr float DEFAULT_ALT_KP = 0.30f;
-constexpr float DEFAULT_ALT_KI = 0.025f;
-constexpr float DEFAULT_ALT_KD = 0.18f;
-constexpr float DEFAULT_ALT_MAX_POWER = 0.12f;
-constexpr float DEFAULT_POWER_SLEW_PER_SEC = 0.18f;
-
-// El integral nunca aporta mas de 6% por si solo.
-constexpr float ALT_I_POWER_MAX = 0.06f;
-constexpr float ALT_I_ACTIVE_ERROR_M = 0.35f;
-constexpr float VZ_FILTER_ALPHA = 0.82f;
-constexpr float HEIGHT_ERROR_DEADBAND_M = 0.025f;
-
-struct ControllerConfig {
-    float kp;
-    float ki;
-    float kd;
-    float maxPower;
-    float slewPerSec;
+ 
+using namespace ControlCommon;
+ 
+constexpr uint32_t DEBUG_PERIOD_MS = 500U;
+ 
+ 
+struct Config {
+    AltGains  gains;
+    AltLimits limits;
+    PackStatus packStatus;
 };
-
-struct AltitudeControllerState {
+ 
+ 
+struct State {
     bool initialized = false;
-    float filteredVz = 0.0f;
-    float integralPower = 0.0f;
-    float lastPower = 0.0f;
+    unsigned long modeEnteredMs = 0U;
+    unsigned long lastUs = 0U;
+ 
+    AltState alt;
+ 
     float lastReference = NAN;
-    unsigned long lastUs = 0;
-    unsigned long lastModeEnteredMs = 0;
+ 
+    uint32_t lastDebugMs = 0U;
+ 
+    // Solo informativo: cuanto lleva dentro de la banda de exito.
+    bool     inBand = false;
+    uint32_t inBandSinceMs = 0U;
 };
-
-AltitudeControllerState ctrl;
-
-ControllerConfig getConfig(const AppContext& ctx) {
-    const float kp = ctx.command.params[AppConfig::PARAM_AUX0];
-    const float ki = ctx.command.params[AppConfig::PARAM_AUX1];
-    const float kd = ctx.command.params[AppConfig::PARAM_AUX2];
-    const float maxPower = ctx.command.params[AppConfig::PARAM_AUX3];
-    const float slew = ctx.command.params[AppConfig::PARAM_AUX4];
-
-    // Durante el paquete ARM los AUX llegan en cero. En ese caso usamos defaults.
-    // maxPower y slew actuan como marcadores de que la configuracion fue enviada.
-    const bool consoleConfigValid =
-        isfinite(kp) && kp >= 0.0f &&
-        isfinite(ki) && ki >= 0.0f &&
-        isfinite(kd) && kd >= 0.0f &&
-        isfinite(maxPower) && maxPower > 0.0f && maxPower <= 1.0f &&
-        isfinite(slew) && slew > 0.0f;
-
-    if (consoleConfigValid) {
-        return {
-            kp,
-            ki,
-            kd,
-            constrain(maxPower, 0.01f, 1.0f),
-            constrain(slew, 0.01f, 2.0f)
-        };
+ 
+State ctrl;
+ 
+ 
+Config getConfig(const AppContext& ctx) {
+ 
+    Config cfg;
+ 
+    cfg.gains.kp = pickPositive(
+        ctx.command.params[AppConfig::PARAM_AUX0], DEF_ALT_KP, 0.0f, 5.0f);
+ 
+    cfg.gains.ki = pickNonNegative(
+        ctx.command.params[AppConfig::PARAM_AUX1], DEF_ALT_KI, 0.0f, 1.0f);
+ 
+    cfg.gains.kd = pickNonNegative(
+        ctx.command.params[AppConfig::PARAM_AUX2], DEF_ALT_KD, 0.0f, 1.0f);
+ 
+    cfg.packStatus = decodeAltPack(
+        ctx.command.params[AppConfig::PARAM_AUX3], cfg.limits);
+ 
+    return cfg;
+}
+ 
+ 
+void dumpConfig(const Config& cfg) {
+ 
+    Serial.printf(
+        "[P04] cfg ALT kp=%.3f ki=%.4f kd=%.3f min=%.3f max=%.3f "
+        "slew=%.3f band=%.0fcm  pack=%s\n",
+        cfg.gains.kp, cfg.gains.ki, cfg.gains.kd,
+        cfg.limits.minPower, cfg.limits.maxPower,
+        cfg.limits.slew,
+        cfg.limits.successM * 100.0f,
+        packStatusName(cfg.packStatus));
+ 
+    if (cfg.packStatus == PackStatus::LEGACY_V1) {
+        Serial.println("[P04] AVISO: run_test.py desactualizado. "
+                       "Actualiza la estacion de tierra o volaras con defaults.");
     }
-
-    return {
-        DEFAULT_ALT_KP,
-        DEFAULT_ALT_KI,
-        DEFAULT_ALT_KD,
-        DEFAULT_ALT_MAX_POWER,
-        DEFAULT_POWER_SLEW_PER_SEC
-    };
 }
-
-int degreesToPulseUs(float deg) {
-    const float clipped = constrain(deg,
-                                    AppConfig::P0025_MIN_DEG,
-                                    AppConfig::P0025_MAX_DEG);
-    const float spanDeg = AppConfig::P0025_MAX_DEG - AppConfig::P0025_MIN_DEG;
-    const float spanUs = (float)(AppConfig::P0025_MAX_US - AppConfig::P0025_MIN_US);
-
-    return (int)lroundf(AppConfig::P0025_MIN_US +
-                        (clipped - AppConfig::P0025_MIN_DEG) * spanUs / spanDeg);
+ 
+ 
+int pulse(float deg) {
+    return degreesToPulseUs(deg,
+                            AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG,
+                            AppConfig::P0025_MIN_US, AppConfig::P0025_MAX_US);
 }
-
-void resetController(float reference, float rawVz) {
-    ctrl.initialized = true;
-    ctrl.filteredVz = isfinite(rawVz) ? rawVz : 0.0f;
-    ctrl.integralPower = 0.0f;
-    ctrl.lastPower = 0.0f;
+ 
+ 
+void resetController(const Config& cfg, float reference, float vz) {
+ 
+    ctrl = State{};
+ 
+    ctrl.initialized   = true;
+    ctrl.lastUs        = micros();
     ctrl.lastReference = reference;
-    ctrl.lastUs = micros();
+    ctrl.lastDebugMs   = millis();
+ 
+    resetAltState(ctrl.alt, vz);
+ 
+    Serial.println("[P04] reset");
+    dumpConfig(cfg);
 }
-
-float calculateAltitudePower(float reference,
-                             float height,
-                             float rawVz,
-                             const ControllerConfig& cfg) {
-    if (!isfinite(reference) || !isfinite(height) || !isfinite(rawVz)) {
-        ctrl.lastPower = 0.0f;
-        return 0.0f;
-    }
-
-    if (!ctrl.initialized || !isfinite(ctrl.lastReference) ||
-        fabsf(reference - ctrl.lastReference) > 0.05f) {
-        resetController(reference, rawVz);
-    }
-
-    const unsigned long nowUs = micros();
-    float dt = (nowUs - ctrl.lastUs) * 1.0e-6f;
-    ctrl.lastUs = nowUs;
-
+ 
+ 
+float getDt() {
+ 
+    const unsigned long now = micros();
+    float dt = (now - ctrl.lastUs) * 1.0e-6f;
+    ctrl.lastUs = now;
+ 
     if (!isfinite(dt) || dt <= 0.0f || dt > 0.20f) {
         dt = 0.01f;
     }
-
-    ctrl.lastReference = reference;
-
-    ctrl.filteredVz = VZ_FILTER_ALPHA * ctrl.filteredVz +
-                      (1.0f - VZ_FILTER_ALPHA) * rawVz;
-
-    const float error = reference - height;
-    float pError = error;
-    if (fabsf(pError) < HEIGHT_ERROR_DEADBAND_M) {
-        pError = 0.0f;
-    }
-
-    if (fabsf(error) <= ALT_I_ACTIVE_ERROR_M) {
-        ctrl.integralPower += cfg.ki * error * dt;
-        const float iLimit = min(ALT_I_POWER_MAX, cfg.maxPower);
-        ctrl.integralPower = constrain(ctrl.integralPower, 0.0f, iLimit);
-    }
-
-    const float pTerm = cfg.kp * pError;
-    const float dTerm = -cfg.kd * ctrl.filteredVz;
-    float requestedPower = pTerm + ctrl.integralPower + dTerm;
-
-    // Solo empuje vertical +Z validado.
-    requestedPower = constrain(requestedPower, 0.0f, cfg.maxPower);
-
-    const float maxDelta = cfg.slewPerSec * dt;
-    float power = constrain(requestedPower,
-                            ctrl.lastPower - maxDelta,
-                            ctrl.lastPower + maxDelta);
-    power = constrain(power, 0.0f, cfg.maxPower);
-    ctrl.lastPower = power;
-
-    return power;
+ 
+    return dt;
 }
-
+ 
 } // namespace
-
+ 
+ 
 namespace TestRunners {
-
+ 
 void p04Altitude(AppContext& ctx) {
+ 
     const float heightRef = ctx.command.params[AppConfig::PARAM_FZ];
-    const float heightNow = ctx.sensors[SensorMap::ALTITUDE];
-    const float verticalVelocity = ctx.sensors[SensorMap::VERTICAL_VELOCITY];
-    const ControllerConfig cfg = getConfig(ctx);
-
-    if (!ctrl.initialized || ctrl.lastModeEnteredMs != ctx.modeEnteredMs) {
-        resetController(heightRef, verticalVelocity);
-        ctrl.lastModeEnteredMs = ctx.modeEnteredMs;
+    const float height    = ctx.sensors[SensorMap::ALTITUDE];
+    const float rawVz     = ctx.sensors[SensorMap::VERTICAL_VELOCITY];
+ 
+    const Config cfg = getConfig(ctx);
+ 
+    const bool newMode = (!ctrl.initialized || ctrl.modeEnteredMs != ctx.modeEnteredMs);
+ 
+    // Un cambio de referencia en caliente tambien reinicia el integral: si no,
+    // el escalon arranca con la carga del setpoint anterior y el transitorio
+    // que midas no sirve para sintonizar.
+    const bool newReference =
+        ctrl.initialized &&
+        isfinite(heightRef) && isfinite(ctrl.lastReference) &&
+        fabsf(heightRef - ctrl.lastReference) > 0.05f;
+ 
+    if (newMode || newReference) {
+        resetController(cfg, heightRef, rawVz);
+        ctrl.modeEnteredMs = ctx.modeEnteredMs;
     }
-
-    const float motorPower = calculateAltitudePower(heightRef,
-                                                    heightNow,
-                                                    verticalVelocity,
-                                                    cfg);
-
-    const int servo1Us = degreesToPulseUs(SERVO1_Z_DEG);
-    const int servo2Us = degreesToPulseUs(SERVO2_Z_DEG);
-
+ 
+    ctrl.lastReference = heightRef;
+ 
+    const float dt    = getDt();
+    const uint32_t nowMs = millis();
+ 
+    const float filteredVz = updateVz(ctrl.alt, rawVz);
+ 
+    const bool valid = isfinite(heightRef) && isfinite(height) && isfinite(rawVz);
+ 
+    const float heightError = valid ? (heightRef - height) : 0.0f;
+ 
+    // ------------------------------------------------------------------
+    // LAZO DE ALTURA
+    //
+    // Servos siempre en el vector vertical, asi que etaZ = 1 y la demanda
+    // de empuje ES la potencia de motor. No hay mixer que enmascare nada.
+    // ------------------------------------------------------------------
+ 
+    float demand = 0.0f;
+ 
+    if (valid) {
+        demand = computeAltDemand(cfg.gains, cfg.limits, ctrl.alt, heightError, dt);
+    }
+ 
+    float power = rateLimit(demand, ctrl.alt.lastPower, cfg.limits.slew, dt);
+    power = constrain(power, 0.0f, cfg.limits.maxPower);
+ 
+    // ------------------------------------------------------------------
+    // ACTUADORES
+    // ------------------------------------------------------------------
+ 
+    const int servo1Us = pulse(SERVO1_Z_DEG);
+    const int servo2Us = pulse(SERVO2_Z_DEG);
+ 
     if (ctx.robot->actuatorsAreArmed()) {
-        ctx.robot->commandMotorPowerTest(motorPower, motorPower,
-                                         servo1Us, servo2Us);
+        ctrl.alt.lastPower = power;
+        ctx.robot->commandMotorPowerTest(power, power, servo1Us, servo2Us);
+    } else {
+        ctrl.alt.lastPower = 0.0f;
+        power = 0.0f;
     }
-
-    ctx.robot->servo_old1 = SERVO1_Z_DEG;
-    ctx.robot->servo_old2 = SERVO2_Z_DEG;
-    ctx.robot->motor_power1 = motorPower;
-    ctx.robot->motor_power2 = motorPower;
-
-    const float heightError = (isfinite(heightRef) && isfinite(heightNow))
-        ? (heightRef - heightNow)
-        : 0.0f;
+ 
+    ctx.robot->servo_old1   = SERVO1_Z_DEG;
+    ctx.robot->servo_old2   = SERVO2_Z_DEG;
+    ctx.robot->motor_power1 = power;
+    ctx.robot->motor_power2 = power;
+ 
+    // ------------------------------------------------------------------
+    // BANDA DE EXITO  (solo informativa, no limita nada)
+    // ------------------------------------------------------------------
+ 
+    const bool nowInBand = valid && (fabsf(heightError) <= cfg.limits.successM);
+ 
+    if (!nowInBand) {
+        ctrl.inBand = false;
+    } else if (!ctrl.inBand) {
+        ctrl.inBand = true;
+        ctrl.inBandSinceMs = nowMs;
+    }
+ 
+    // ------------------------------------------------------------------
+    // DEBUG
+    //
+    // Mira `I`: cuando se estabiliza, ESA es tu potencia de hover. Es el
+    // numero que necesitas para elegir amin/amax y para --yaw-base-power
+    // de P03.
+    // ------------------------------------------------------------------
+ 
+    if (elapsedMs(nowMs, ctrl.lastDebugMs, DEBUG_PERIOD_MS)) {
+ 
+        ctrl.lastDebugMs = nowMs;
+ 
+        const uint32_t bandMs = ctrl.inBand ? (nowMs - ctrl.inBandSinceMs) : 0U;
+ 
+        Serial.printf(
+            "[P04] zRef=%.2f z=%.2f zErr=%.3f vz=%.3f | "
+            "P=%.3f I=%.3f D=%.3f | dem=%.3f out=%.3f | band=%lums\n",
+            heightRef,
+            height,
+            heightError,
+            filteredVz,
+            cfg.gains.kp * ((fabsf(heightError) < ALT_DEADBAND_M) ? 0.0f : heightError),
+            ctrl.alt.integral,
+            -cfg.gains.kd * filteredVz,
+            demand,
+            power,
+            (unsigned long)bandMs);
+    }
+ 
     Telemetry::sendControl(ctx, 0.0f, heightRef, heightError);
 }
-
+ 
 } // namespace TestRunners
+ 
