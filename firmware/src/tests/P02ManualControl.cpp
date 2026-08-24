@@ -1,22 +1,34 @@
 #include "tests/TestRunners.h"
 #include "app/AppConfig.h"
+#include "app/ControlCommon.h"
 #include "app/Telemetry.h"
 #include <Arduino.h>
 #include <math.h>
 
 namespace {
+// GEOMETRIA COMPARTIDA
+// --------------------
+// Este archivo tenia su propia copia de las posiciones de servo, con
+// SERVO2_Z_DEG = 85. Ese valor quedo OBSOLETO el 23/08: la gondola izquierda
+// esta desalineada 10 grados y su vertical real es 95. Con 85 el vehiculo
+// giraba solo, una vuelta completa cada 13 segundos.
+//
+// Al tomar las constantes de ControlCommon.h, cualquier recalibracion futura
+// de la geometria se aplica a TODOS los tests a la vez, en vez de tener que
+// acordarse de tocar cinco archivos.
+using ControlCommon::SERVO1_Z_DEG;
+using ControlCommon::SERVO2_Z_DEG;
+using ControlCommon::SERVO1_LEFT_DEG;
+using ControlCommon::SERVO2_LEFT_DEG;
+using ControlCommon::SERVO1_RIGHT_DEG;
+using ControlCommon::SERVO2_RIGHT_DEG;
+using ControlCommon::SERVO1_FORWARD_DEG;
+using ControlCommon::SERVO2_FORWARD_DEG;
+using ControlCommon::SERVO1_BACK_DEG;
+using ControlCommon::SERVO2_BACK_DEG;
+
 
 // Calibracion fisica validada en P00/P00M (16-08-2026)
-constexpr float SERVO1_Z_DEG       = 35.0f;
-constexpr float SERVO2_Z_DEG       = 85.0f;
-constexpr float SERVO1_FORWARD_DEG = 120.0f;
-constexpr float SERVO2_FORWARD_DEG = 0.0f;
-constexpr float SERVO1_BACK_DEG    = 0.0f;
-constexpr float SERVO2_BACK_DEG    = 120.0f;
-constexpr float SERVO1_RIGHT_DEG   = 120.0f;
-constexpr float SERVO2_RIGHT_DEG   = 120.0f;
-constexpr float SERVO1_LEFT_DEG    = 0.0f;
-constexpr float SERVO2_LEFT_DEG    = 0.0f;
 
 // P02 es una prueba manual limitada: usamos la potencia que ya fue validada
 // fisicamente en P00M para no depender del mixer/PID general.
