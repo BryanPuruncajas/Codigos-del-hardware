@@ -12,7 +12,7 @@ class BlimpApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Blimp Monitor',
+      title: 'AeroStock',
       theme: AppTheme.light,
       home: const HomeScreen(),
     );

@@ -10,8 +10,11 @@ Que hace
 --------
 Abre el mismo BlimpLink que usan run_test.py / simple_control.py para leer
 el puerto serial de la base station, reenvia la telemetria a todos los
-clientes conectados, y permite que clientes autenticados como "dev" manden
-comandos de vuelta (armar/desarmar/control directo).
+clientes conectados, permite que clientes autenticados como "dev" manden
+comandos de vuelta (armar/desarmar/control directo), y guarda la misma
+telemetria en logs/blimp_<timestamp>.csv con el mismo formato que usa
+run_test.py (o sea, analyze.py funciona igual con vuelos hechos desde la
+app).
 
 No reemplaza ni modifica run_test.py: es un lector/escritor alternativo del
 mismo puerto serial. No lo corras al mismo tiempo que run_test.py -- dos
@@ -56,6 +59,74 @@ COMANDOS (cliente dev -> servidor)
      "arm": 0, "reload": 0, "reset": 0,
      "aux": {"5": 0.12, "7": 0.08}}       # indices de aux como string
 
+"control" es de bajo nivel: el cliente arma fx/fz/tx/tz/aux a mano, con los
+indices crudos que espera ControlInput. Para P03-P11 eso significa conocer
+el empaquetado de bits ALT_PACK/YAW_PACK (ver common/control_pack.py) y el
+mapa de slots por modo -- exactamente lo que hace run_test.py. En vez de
+reimplementar eso en la app, usa los comandos de alto nivel:
+
+    {"cmd": "mission_start", "test": "p08", "height": 0.7,
+     "kp": 0.30, "ki": 0.025, "kd": 0.10, "max_power": 15, "slew": 0.18,
+     "vis_min_power": 6, "vis_max_power": 10, "vis_deadband_px": 20}
+
+    {"cmd": "mission_update", "test": "p08", ...mismos campos...}
+
+"test" es el mismo string que usarias como argumento de run_test.py
+(p03..p11). Los demas campos son EXACTAMENTE los mismos nombres que los
+--flags de run_test.py sin guiones (--vis-min-power -> "vis_min_power"),
+y los que se omiten usan el mismo default que la CLI (ver
+common/control_pack.py:DEFAULT_ARGS). El bridge arma fx/fz/tx/tz/aux con
+common.control_pack.build_control_payload(), el MISMO codigo que usa
+run_test.py, asi que el resultado es identico bit a bit.
+
+- "mission_start": hace la secuencia completa de armado (igual que
+  run_test.py): manda el paquete con arm=1, espera 4.2s a que arme el ESC,
+  y despues manda reset=1 con las mismas referencias/ganancias. Uso: boton
+  "Iniciar mision".
+- "mission_update": NO rearma. Solo reenvia fx/fz/tx/tz/aux con reset=1 --
+  para ajustar ganancias en caliente con la mision ya corriendo/armada.
+
+Ambos responden con:
+    {"cmd_ok": true, "cmd": "mission_start", "effective": ["...", "..."]}
+"effective" son las mismas lineas de texto que run_test.py imprime como
+"VALORES EFECTIVOS" (los parametros YA cuantizados que se van a aplicar).
+
+BANCO DE PRUEBAS: P00 (servos) y P00M (motores)
+------------------------------------------------
+Equivalente de alto nivel a `run_test.py p00` / `p00m`, para el panel de
+banco de pruebas de la app. A diferencia de mission_start/update, esta
+logica NO pasa por common/control_pack.py (P00/P00M no usan el empaquetado
+ALT_PACK/YAW_PACK ni el mapa de slots de P03-P11): son modos crudos con
+selector de servo / potencia directa, asi que se arman aca mismo.
+
+    {"cmd": "servo_set", "servo": "both", "angle1": 35, "angle2": 95}
+                                                        # servo: '1'|'2'|'both'
+
+Si "servo" es '1' o '2', mueve SOLO ese servo (el otro queda detach, igual
+que la CLI). Si es 'both', mueve LOS DOS con sus propios angle1/angle2 --
+casi nunca deben ser iguales: los servos van en espejo, asi que el vector
+vertical real es 35/95 (no 35/35), avance 120/0, retroceso 0/120 (ver
+SERVO*_Z_DEG/FORWARD_DEG/BACK_DEG en firmware/src/app/ControlCommon.h).
+Sirve para chequear a mano si el vector de empuje resultante apunta donde
+deberia.
+
+    {"cmd": "motor_arm", "servo1": 35, "servo2": 95}
+
+Hace la secuencia completa de P00M: posiciona AMBOS servos con brushless
+BLOQUEADOS, espera 1s, y ejecuta la secuencia de ARM del firmware viejo
+(throttle minimo ~3.7s y vuelve a 0). Este comando tarda ~5s en responder
+a proposito -- recien cuando responde cmd_ok es seguro mandar potencia.
+SIN ESTO, motor_power no hace nada (los actuadores siguen desarmados).
+
+    {"cmd": "motor_power", "motor": "both", "power": 10,
+     "servo1": 35, "servo2": 95}
+
+Aplica potencia (0..100%) en caliente sobre los servos ya armados por
+motor_arm. Hay que seguir mandando los mismos servo1/servo2 en cada
+llamada (el firmware no los recuerda entre paquetes de este modo). Para
+cortar YA: mandar power=0, o directamente {"cmd": "stop"} (SAFE_STOP,
+desarma todo).
+
 Opcional en cualquier comando: "mac": "DC:B4:D9:39:B3:B4" para apuntar a un
 robot especifico. Si no se manda, usa ROBOT_MACS[0] de user_parameters.py.
 
@@ -72,11 +143,14 @@ import asyncio
 import json
 import struct
 import time
+from pathlib import Path
 
 import websockets
 
 from common.link import BlimpLink, mac_to_bytes
 from common.telemetry import LABELS, parse
+from common.control_pack import NAME_TO_MODE, build_control_payload, make_args
+from common.csv_logger import CsvLogger
 from user_parameters import ROBOT_MACS
 
 clients: dict[websockets.WebSocketServerProtocol, str] = {}  # ws -> role
@@ -186,6 +260,8 @@ def make_handler(link: BlimpLink, dev_token: str):
                     continue
 
                 try:
+                    effective = None
+
                     if cmd == 'arm':
                         await write_control(link, mac, mode=last_known_mode, arm=1)
                     elif cmd == 'disarm':
@@ -208,6 +284,122 @@ def make_handler(link: BlimpLink, dev_token: str):
                             reset=msg.get('reset', 0),
                             aux=msg.get('aux'),
                         )
+                    elif cmd in ('mission_start', 'mission_update'):
+                        test = msg.get('test')
+                        if test not in NAME_TO_MODE:
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': f'test desconocido: {test!r} '
+                                         f'(usa p03..p11, igual que run_test.py)',
+                            }))
+                            continue
+
+                        overrides = {k: v for k, v in msg.items()
+                                     if k not in ('cmd', 'test', 'mac')}
+                        try:
+                            control_args = make_args(test, **overrides)
+                            fx, fz, tx, tz, aux, effective = build_control_payload(control_args)
+                        except (TypeError, ValueError) as e:
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': f'parametros invalidos: {e}',
+                            }))
+                            continue
+
+                        mode = NAME_TO_MODE[test]
+                        if cmd == 'mission_start':
+                            # Misma secuencia que run_test.py: ARM con el
+                            # paquete completo, esperar al ESC, y recien
+                            # despues RESET para arrancar limpio.
+                            await write_control(link, mac, mode=mode,
+                                                 fx=fx, fz=fz, tx=tx, tz=tz,
+                                                 aux=aux, arm=1)
+                            await asyncio.sleep(4.2)
+                        await write_control(link, mac, mode=mode,
+                                             fx=fx, fz=fz, tx=tx, tz=tz,
+                                             aux=aux, reset=1)
+
+                    elif cmd == 'servo_set':
+                        # P00: si servo es '1'/'2', mueve SOLO ese servo (el
+                        # otro queda detach). Si es 'both', mueve los DOS a
+                        # la vez con SUS PROPIOS angulos -- angle1/angle2
+                        # casi nunca son iguales, porque los servos van en
+                        # espejo (el vector vertical real es 35/95, no
+                        # 35/35; ver SERVO*_Z_DEG en ControlCommon.h).
+                        servo = str(msg.get('servo', 'both'))
+                        angle1 = float(msg.get('angle1', 35.0))
+                        angle2 = float(msg.get('angle2', 95.0))
+                        if not (0.0 <= angle1 <= 120.0 and 0.0 <= angle2 <= 120.0):
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': 'angle1/angle2 deben estar entre 0 y 120 grados',
+                            }))
+                            continue
+                        selector = {'1': 1.0, '2': 2.0, 'both': 3.0}.get(servo)
+                        if selector is None:
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': f"servo debe ser '1', '2' o 'both', "
+                                         f"recibido {servo!r}",
+                            }))
+                            continue
+                        await write_control(link, mac, mode=NAME_TO_MODE['p00'],
+                                             aux={5: angle1, 6: angle2, 7: selector},
+                                             reset=1)
+                        effective = [f'Servo {servo}: S1={angle1:.0f}° S2={angle2:.0f}°']
+
+                    elif cmd == 'motor_arm':
+                        # P00M, paso a paso, igual que run_test.py:
+                        #  1) posiciona AMBOS servos con brushless bloqueados
+                        #  2) secuencia de ARM del firmware viejo: throttle
+                        #     minimo ~3.7s y vuelve a 0 -- ahi si ya se puede
+                        #     mandar potencia con motor_power.
+                        # A diferencia de la CLI (que usa el tiempo que tarda
+                        # el humano en escribir "ARMAR" como colchon), aca
+                        # esperamos explicito antes de responder cmd_ok.
+                        s1 = float(msg.get('servo1', 35.0))
+                        s2 = float(msg.get('servo2', 95.0))
+                        if not (0.0 <= s1 <= 120.0 and 0.0 <= s2 <= 120.0):
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': 'servo1/servo2 deben estar entre 0 y 120 grados',
+                            }))
+                            continue
+                        await write_control(link, mac, mode=NAME_TO_MODE['p00'],
+                                             aux={5: s1, 6: s2, 7: 3.0}, reset=1)
+                        await asyncio.sleep(1.0)
+                        await write_control(link, mac, mode=NAME_TO_MODE['p00m'],
+                                             arm=1, aux={5: s1, 6: s2, 7: 0.0, 8: 0.0})
+                        await asyncio.sleep(4.0)
+                        effective = [f'Servos en S1={s1:.0f}° S2={s2:.0f}°, ESC armado']
+
+                    elif cmd == 'motor_power':
+                        # Actualiza potencia en caliente (mode ya armado por
+                        # motor_arm). Sin ARM previo, el firmware ignora la
+                        # potencia porque los actuadores siguen desarmados.
+                        motor = str(msg.get('motor', 'both'))
+                        power = float(msg.get('power', 0.0))
+                        s1 = float(msg.get('servo1', 35.0))
+                        s2 = float(msg.get('servo2', 95.0))
+                        if motor not in ('1', '2', 'both'):
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': f"motor debe ser '1', '2' o 'both', "
+                                         f"recibido {motor!r}",
+                            }))
+                            continue
+                        if not (0.0 <= power <= 100.0):
+                            await ws.send(json.dumps({
+                                'cmd_ok': False, 'cmd': cmd,
+                                'error': 'power debe estar entre 0 y 100',
+                            }))
+                            continue
+                        m1 = power / 100.0 if motor in ('1', 'both') else 0.0
+                        m2 = power / 100.0 if motor in ('2', 'both') else 0.0
+                        await write_control(link, mac, mode=NAME_TO_MODE['p00m'],
+                                             aux={5: s1, 6: s2, 7: m1, 8: m2})
+                        effective = [f'Motor {motor}: {power:.0f}%']
+
                     else:
                         await ws.send(json.dumps({
                             'cmd_ok': False, 'cmd': cmd,
@@ -215,7 +407,10 @@ def make_handler(link: BlimpLink, dev_token: str):
                         }))
                         continue
 
-                    await ws.send(json.dumps({'cmd_ok': True, 'cmd': cmd}))
+                    ok_msg = {'cmd_ok': True, 'cmd': cmd}
+                    if effective is not None:
+                        ok_msg['effective'] = effective
+                    await ws.send(json.dumps(ok_msg))
 
                 except (websockets.exceptions.ConnectionClosed, OSError):
                     # El cliente se corto justo al mandar/recibir la
@@ -249,7 +444,7 @@ def make_handler(link: BlimpLink, dev_token: str):
 # LECTURA CONTINUA DEL SERIAL -> BROADCAST
 # ============================================================================
 
-async def read_loop(link: BlimpLink) -> None:
+async def read_loop(link: BlimpLink, logger: CsvLogger) -> None:
     global last_known_mode
     loop = asyncio.get_event_loop()
     gen = link.lines()
@@ -269,6 +464,8 @@ async def read_loop(link: BlimpLink) -> None:
         if tel is None:
             continue
 
+        logger.add(tel)
+
         labels = LABELS.get(tel.flag, [])
         fields = dict(zip(labels, tel.values))
 
@@ -286,6 +483,12 @@ async def read_loop(link: BlimpLink) -> None:
 async def main(port_name: str, ws_port: int, dev_token: str) -> None:
     link = BlimpLink(port_name)
     print(f"[bridge] serial abierto en {port_name}")
+
+    # Mismo CsvLogger que usa run_test.py: cada linea de telemetria que pasa
+    # por el bridge (venga la conexion de la app o no) queda en logs/, con
+    # el mismo formato que ya lee analyze.py.
+    logger = CsvLogger(Path(__file__).resolve().parent.parent / 'logs')
+    print(f"[bridge] guardando telemetria en {logger.path}")
 
     # HANDSHAKE INICIAL -- sin esto, la base station puede RECIBIR
     # telemetria del robot sin problema, pero no tiene registrado el peer
@@ -314,9 +517,11 @@ async def main(port_name: str, ws_port: int, dev_token: str) -> None:
 
     async with websockets.serve(handler, '0.0.0.0', ws_port):
         try:
-            await read_loop(link)
+            await read_loop(link, logger)
         finally:
             link.close()
+            logger.close()
+            print(f"[bridge] CSV cerrado: {logger.path}")
 
 
 if __name__ == '__main__':

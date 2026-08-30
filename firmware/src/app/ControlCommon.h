@@ -72,13 +72,13 @@ namespace ControlCommon {
 // GEOMETRIA DE LOS SERVOS  (posiciones validadas fisicamente en P00/P02)
 // ============================================================================
 //
-//   Vector vertical +Z : S1=35   S2=85
+//   Vector vertical +Z : S1=35   S2=95
 //   Giro izquierda     : S1=0    S2=0
 //   Giro derecha       : S1=120  S2=120
 //
 // OJO CON LA ASIMETRIA: desde Z, el servo 1 recorre 35 grados hasta su extremo
-// y el servo 2 recorre 85. Con autoridad alta los angulos quedan muy distintos
-// (phi1=-35, phi2=+85), asi que el giro NO es una cupla pura: hay una fuerza
+// y el servo 2 recorre 95. Con autoridad alta los angulos quedan muy distintos
+// (phi1=-35, phi2=+95), asi que el giro NO es una cupla pura: hay una fuerza
 // lateral neta y el blimp deriva mientras gira. Es geometria del montaje, no
 // se arregla en software. Caracterizala con P03 antes de pasar a P07.
 // ============================================================================
@@ -888,6 +888,67 @@ inline void mixOutputs(float zDemand,
     const float pYaw = yawPowerFromCommand(yawCmd, yawLim);
 
     power = constrain(fmaxf(pAlt, pYaw), 0.0f, maxPower);
+}
+
+
+// ============================================================================
+// ASIGNACION ANALITICA DE EMPUJE (avance + altura)
+//
+// Fuente: Xu et al., "MochiSwarm: A testbed for robotic blimps in realistic
+// environments" (arXiv:2503.03077), ecuaciones (4),(5),(9)-(11). El paper
+// resuelve el angulo de cada rotor por trigonometria directa a partir de la
+// fuerza horizontal y vertical deseadas, en vez de fijar una inclinacion de
+// antemano y despues subir potencia para compensar la sustentacion perdida
+// (que es lo que hacia BalloonMission::update() antes de esto: inclinar los
+// servos a una FRACCION FIJA del recorrido hacia adelante y dividir la
+// demanda de altura entre la eficiencia resultante -- funcionaba, pero
+// dejaba de sobra mas componente vertical de la necesaria, o mas horizontal
+// de la que el motor podia sostener, segun el punto de operacion).
+//
+// Aca no hay reparto de yaw todavia (tauZ=0 en el paper): los dos motores
+// reciben la MISMA fx y fz, asi que power1 siempre sale igual a power2. El
+// angulo de cada servo SI difiere entre motor 1 y 2 porque cada gondola
+// tiene su propia geometria (SERVO*_Z_DEG/FORWARD_DEG/BACK_DEG, calibrados
+// por separado en P00/P02 por la asimetria del montaje).
+//
+//   fx : empuje horizontal deseado, fraccion de potencia. Positivo = avanza,
+//        negativo = retrocede.
+//   fz : empuje vertical deseado, fraccion de potencia. Se recorta a >= 0:
+//        este vehiculo no tiene vector activo hacia -Z (ver README, "no
+//        existe empuje activo hacia -Z").
+//   maxPower : tope de potencia por motor.
+//
+// La altura tiene PRIORIDAD sobre el avance: si fx y fz juntos pedirian mas
+// de maxPower, se recorta fx (nunca fz) para no perder sustentacion --mismo
+// criterio de seguridad que mixOutputs() usa con max(pAlt,pYaw), adaptado a
+// que aca hay una sola potencia por motor que se reparte en ANGULO en vez
+// de en dos mandos separados.
+// ============================================================================
+inline void computeThrustAllocation(float fx, float fz, float maxPower,
+                                    float& servo1Deg, float& servo2Deg,
+                                    float& power1, float& power2) {
+    const float fzClamped = constrain(fz, 0.0f, maxPower);
+
+    const float maxFxAvailable = sqrtf(
+        fmaxf(maxPower * maxPower - fzClamped * fzClamped, 0.0f));
+    const float fxClamped = constrain(fx, -maxFxAvailable, maxFxAvailable);
+
+    const float power = sqrtf(fxClamped * fxClamped + fzClamped * fzClamped);
+
+    // Angulo del vector de empuje medido desde la vertical: 0 = vector Z
+    // puro, PI/2 = horizontal puro. m es la misma fraccion de recorrido
+    // Z->FORWARD/BACK que usaban servosFromBlend()/APPROACH_FORWARD_FRACTION,
+    // pero calculada exactamente en vez de fijada de antemano.
+    const float angleFromVertical = atan2f(fabsf(fxClamped), fzClamped);
+    const float m = constrain(angleFromVertical / (PI * 0.5f), 0.0f, 1.0f);
+
+    const float s1Target = (fxClamped >= 0.0f) ? SERVO1_FORWARD_DEG : SERVO1_BACK_DEG;
+    const float s2Target = (fxClamped >= 0.0f) ? SERVO2_FORWARD_DEG : SERVO2_BACK_DEG;
+
+    servo1Deg = SERVO1_Z_DEG + (s1Target - SERVO1_Z_DEG) * m;
+    servo2Deg = SERVO2_Z_DEG + (s2Target - SERVO2_Z_DEG) * m;
+    power1 = power;
+    power2 = power;
 }
 
 } // namespace ControlCommon

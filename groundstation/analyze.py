@@ -707,7 +707,7 @@ def plot_yaw(runs, band_deg, save, show):
     ax2.set_xlabel('tiempo desde ARM [s]')
     ax2.grid(alpha=0.3)
     ax2.set_title('Servo 1 (solida) y Servo 2 (punteada); '
-                  'lineas grises = vector vertical 35/85', fontsize=9)
+                  'lineas grises = vector vertical 35/95', fontsize=9)
 
     fig.tight_layout()
     _finish(fig, 'yaw', save, show)

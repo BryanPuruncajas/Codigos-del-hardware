@@ -111,20 +111,13 @@ constexpr unsigned long VISION_UPDATE_MS = 100;
 
 // AVANCE HACIA EL GLOBO
 // ---------------------
-// Fraccion del recorrido hacia la posicion horizontal. NO puede ser 1.0:
-// con S1=120 y S2=0 los empujes quedan opuestos en vertical y etaZ = 0
-// EXACTAMENTE, o sea que ninguna potencia produce sustentacion y el blimp
-// cae mientras avanza.
-//
-//   avance   etaZ    potencia para 11% de hover
-//    25%     0.92          11.9%
-//    50%     0.71          15.6%   <- elegido
-//    75%     0.38          28.8%
-//   100%     0.00       imposible
-//
-// Con 50% queda empuje horizontal util y todavia 0.71 de eficiencia vertical,
-// que con max-power 16-20% deja margen para sostenerse mientras se acerca.
-constexpr float APPROACH_FORWARD_FRACTION = 0.50f;
+// Antes esto inclinaba los servos a una FRACCION FIJA del recorrido hacia
+// la posicion horizontal (0.50, elegida a mano) y compensaba la sustentacion
+// perdida subiendo potencia. Reemplazado por
+// ControlCommon::computeThrustAllocation(), que calcula el angulo exacto a
+// partir de MOVE_POWER y altitudeDemand (ver la rama de avance en APPROACH,
+// mas abajo) siguiendo la asignacion analitica de MochiSwarm (Xu et al.
+// 2025, ecs. 4,5,9-11) en vez de una fraccion fija.
 constexpr int CLOSE_FRAMES_REQUIRED = 3;
 constexpr int LOST_FRAMES_REQUIRED = 8;
 constexpr unsigned long ESCAPE_MS = 1800;
@@ -327,22 +320,24 @@ int degreesToPulseUs(float deg) {
 void applyPhysicalCommand(AppContext& ctx,
                           float servo1Deg,
                           float servo2Deg,
-                          float motorPower) {
-    motorPower = constrain(motorPower, 0.0f, 1.0f);
+                          float motor1Power,
+                          float motor2Power) {
+    motor1Power = constrain(motor1Power, 0.0f, 1.0f);
+    motor2Power = constrain(motor2Power, 0.0f, 1.0f);
 
     const int servo1Us = degreesToPulseUs(servo1Deg);
     const int servo2Us = degreesToPulseUs(servo2Deg);
 
     if (ctx.robot->actuatorsAreArmed()) {
-        ctx.robot->commandMotorPowerTest(motorPower, motorPower,
+        ctx.robot->commandMotorPowerTest(motor1Power, motor2Power,
                                          servo1Us, servo2Us);
     }
 
     // F3 refleja exactamente lo ordenado por la mision.
     ctx.robot->servo_old1 = servo1Deg;
     ctx.robot->servo_old2 = servo2Deg;
-    ctx.robot->motor_power1 = motorPower;
-    ctx.robot->motor_power2 = motorPower;
+    ctx.robot->motor_power1 = motor1Power;
+    ctx.robot->motor_power2 = motor2Power;
 }
 
 // ============================================================================
@@ -600,6 +595,14 @@ void BalloonMission::update(AppContext& ctx) {
     float motorPower = 0.0f;
     float diagnosticFx = 0.0f;
 
+    // Solo el avance en APPROACH usa potencias independientes por motor
+    // (ver ControlCommon::computeThrustAllocation). El resto de los estados
+    // siguen mandando la misma potencia a los dos motores a traves de
+    // motorPower, como siempre.
+    float motor1Power = 0.0f;
+    float motor2Power = 0.0f;
+    bool independentMotors = false;
+
     // Para SEARCH/WAIT_TARGET_LOST:
     // P08/P09 conservan 20%; P10/P11 toman --vis-max-power.
     const float searchTurnPower = visualCfg.maxPower;
@@ -712,6 +715,7 @@ void BalloonMission::update(AppContext& ctx) {
             applyPhysicalCommand(ctx,
                                  SERVO1_Z_DEG,
                                  SERVO2_Z_DEG,
+                                 altitudePower,
                                  altitudePower);
 
             // En F4, fx_cmd contiene error de altura durante esta correccion.
@@ -893,26 +897,15 @@ void BalloonMission::update(AppContext& ctx) {
                 // Ya esta centrado: suelta la referencia de yaw y avanza.
                 resetMissionYaw(yaw);
 
-                // Avance PARCIAL: a recorrido completo etaZ = 0 y el blimp
-                // no puede sostenerse. Ver APPROACH_FORWARD_FRACTION.
-                servo1Deg = SERVO1_Z_DEG +
-                    (SERVO1_FORWARD_DEG - SERVO1_Z_DEG) * APPROACH_FORWARD_FRACTION;
-                servo2Deg = SERVO2_Z_DEG +
-                    (SERVO2_FORWARD_DEG - SERVO2_Z_DEG) * APPROACH_FORWARD_FRACTION;
-
-                // Compensa la perdida de eficiencia vertical de la
-                // inclinacion: el empuje vertical entregado es power * etaZ.
-                float etaZfwd = 1.0f, etaYfwd = 0.0f;
-                ControlCommon::computeEfficiencies(servo1Deg, servo2Deg,
-                                                   etaZfwd, etaYfwd);
-                const float altNeeded =
-                    altitudeDemand / ((etaZfwd > 0.35f) ? etaZfwd : 0.35f);
-                // Avance hacia el globo: se suma el sostenimiento para no
-                // perder altura mientras se acerca.
-                motorPower = (MOVE_POWER > altNeeded) ? MOVE_POWER : altNeeded;
-                if (motorPower > altitudeCfg.maxPower) {
-                    motorPower = altitudeCfg.maxPower;
-                }
+                // Asignacion analitica (ver ControlCommon::computeThrustAllocation):
+                // calcula el angulo EXACTO de cada servo para el avance
+                // (MOVE_POWER) y la altura (altitudeDemand) pedidos, en vez
+                // de inclinar a una fraccion fija y despues inflar la
+                // potencia para compensar la sustentacion perdida.
+                ControlCommon::computeThrustAllocation(
+                    MOVE_POWER, altitudeDemand, altitudeCfg.maxPower,
+                    servo1Deg, servo2Deg, motor1Power, motor2Power);
+                independentMotors = true;
 
                 // Solo intentamos confirmar visita si esta centrado y cerca.
                 if (score >= VISIT_SCORE_THRESHOLD) {
@@ -1011,10 +1004,15 @@ void BalloonMission::update(AppContext& ctx) {
         break;
     }
 
+    if (!independentMotors) {
+        motor1Power = motorPower;
+        motor2Power = motorPower;
+    }
     applyPhysicalCommand(ctx,
                          servo1Deg,
                          servo2Deg,
-                         motorPower);
+                         motor1Power,
+                         motor2Power);
 
     // P08-P11 se desarman automaticamente al llegar a DONE.
     if (state_ == DONE && ctx.robot->actuatorsAreArmed()) {
