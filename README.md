@@ -1,12 +1,100 @@
 # mi-blimp-mio — Manual técnico completo del proyecto de tesis
 
-**Estado revisado:** 17 de agosto de 2026  
+**Estado revisado:** 30 de agosto de 2026  
 **Plataforma principal:** Seeed Studio XIAO ESP32-S3  
 **Comunicación de tierra:** ESP32 Base Station por USB ↔ ESP-NOW ↔ XIAO ESP32-S3  
 **Visión:** Arduino Nicla Vision con OpenMV/MicroPython  
 **Sensores activos:** BNO085/BNO086 + BMP390 + batería + Nicla Vision  
-**Actuadores:** 2 motores brushless con ESC + 2 servos K-Power P0025
+**Actuadores:** 2 motores brushless con ESC + 2 servos K-Power P0025  
+**Control:** por consola (`run_test.py`) o desde la app móvil **AeroStock** (`blimp_app/`)
 
+---
+
+## Guía rápida: cómo correr todo hoy
+
+Esta sección es el punto de entrada para un día de pruebas. El detalle de cada
+prueba (P00–P11, parámetros, teoría) sigue más abajo en las secciones
+numeradas; esto es solo la secuencia de arranque.
+
+### Paso 0 — una sola vez
+
+```powershell
+# Firmware (necesita PlatformIO CLI instalado)
+cd firmware
+pio run
+
+# Ground station (Python)
+cd ../groundstation
+pip install -r requirements.txt
+
+# App AeroStock (solo si vas a compilarla vos; si ya está instalada en el
+# celular, salteá esto)
+cd ../blimp_app
+flutter pub get
+```
+
+### Paso 1 — subir firmware
+
+```powershell
+cd firmware
+pio run -t upload
+pio device monitor -b 115200   # anotá la MAC que imprime al bootear
+```
+
+```powershell
+cd ../base_station
+pio run -t upload
+pio device monitor -b 115200   # anotá la MAC de la base (BASE_MAC,...)
+```
+
+### Paso 2 — configurar `groundstation/user_parameters.py`
+
+```python
+robot_macs = ["AA:BB:CC:DD:EE:FF"]   # la MAC que imprimió el XIAO
+SERIAL_PORT = "COM7"                 # el COM de la BASE STATION, no el del XIAO
+```
+
+Esto lo usan **tanto** `run_test.py` como `telemetry_bridge.py` (la app usa este mismo archivo).
+
+### Paso 3A — controlar por consola
+
+```powershell
+cd groundstation
+python run_test.py p01 --seconds 30
+```
+
+Ver la sección **23. run_test.py** más abajo para la lista completa de pruebas y parámetros.
+
+### Paso 3B — controlar desde la app AeroStock
+
+1. Cerrá cualquier Monitor Serial abierto (Arduino/PlatformIO) — si no, el bridge no puede abrir el COM.
+2. Arrancá el bridge:
+   ```powershell
+   cd groundstation
+   python telemetry_bridge.py COM7
+   ```
+   Sin `--dev-token` usa `changeme` por default, que es el mismo valor que trae
+   "quemado" `AppConfig.devToken` en la app — no hace falta que coincidas nada a mano.
+   Vas a ver en consola dónde está grabando el CSV de esta corrida.
+3. Conseguí la IP de la laptop (`ipconfig`, buscá la IPv4 de la red WiFi). El celular tiene que estar en la **misma red**.
+4. En la app: **Modo desarrollador** → ícono de red (⚙️) → poné la IP → **Conectar**. El chip de arriba tiene que decir **"Dev"** (si dice "solo viewer", el token no coincide).
+5. Paneles disponibles en Modo desarrollador:
+
+   | Panel | Equivale a | Para qué |
+   |---|---|---|
+   | **Misión** | `run_test.py p08/p09/p10/p11` | Lanzar una misión completa (armado automático + parámetros) |
+   | **Panel de control** | `run_test.py p04/p05` | Altura sola / altura+yaw |
+   | **Control manual** | `run_test.py p02` | D-pad: mantener presionado mueve, soltar vuelve a neutro |
+   | **Banco de pruebas** | `run_test.py p00` / `p00m` | Servos sueltos (con presets Vertical/Avance/Retroceso) y motores con potencia manual, con confirmación explícita antes de armar brushless |
+
+   Las gráficas de altura/yaw en vivo (actual vs referencia) y el track de
+   globos visitados están siempre visibles arriba de estos paneles.
+6. **Sin hardware a mano:** desde el home, "Vista previa (demo)" recorre toda
+   la interfaz con datos simulados — útil para mostrar la app o revisar un
+   diseño sin encender nada.
+
+El CSV se graba automático en `logs/` tanto si controlás por consola como por
+la app — mismo formato en los dos casos, `python analyze.py <archivo>.csv` funciona igual.
 
 ---
 
@@ -73,7 +161,7 @@ mi-blimp-mio/
 | `groundstation/` | Scripts Python para mandar comandos, armar, ejecutar pruebas y guardar telemetría. |
 | `vision/` | Código MicroPython/OpenMV de la Nicla Vision. |
 | `calibration/` | Datos y scripts para calibración estadística de colores. |
-| `logs/` | CSV generados automáticamente por `run_test.py`. |
+| `logs/` | CSV generados automáticamente por `run_test.py` o `telemetry_bridge.py` (mismo formato). |
 | `mission/` | Máquina de estados P08–P11. |
 | `legacy/` | Código heredado/no activo conservado como referencia. |
 
@@ -161,7 +249,7 @@ Estas posiciones ya fueron probadas físicamente:
 
 | Movimiento | Servo 1 | Servo 2 |
 |---|---:|---:|
-| Vector vertical +Z | 35° | 85° |
+| Vector vertical +Z | 35° | 95° (era 85°, corregido el 23/08 por desalineación de la góndola izquierda) |
 | Avance | 120° | 0° |
 | Retroceso | 0° | 120° |
 | Giro derecha / horario | 120° | 120° |
@@ -1156,11 +1244,14 @@ elapsed_s
 
 # 26. Logs CSV
 
-Cada ejecución crea automáticamente:
+Cada ejecución de `run_test.py` **o** cada sesión de `telemetry_bridge.py`
+(o sea, cada vez que controlás desde la app AeroStock) crea automáticamente:
 
 ```text
 logs/blimp_YYYYMMDD_HHMMSS.csv
 ```
+
+Mismo formato en los dos casos — `analyze.py` no distingue de dónde vino el log.
 
 Columnas:
 
@@ -1223,7 +1314,7 @@ python run_test.py p00 --servo 1 --servo-angle 35 --seconds 10
 ## Posición fija Servo 2
 
 ```powershell
-python run_test.py p00 --servo 2 --servo-angle 85 --seconds 10
+python run_test.py p00 --servo 2 --servo-angle 95 --seconds 10
 ```
 
 ## Ambos
@@ -1251,19 +1342,19 @@ Permite mandar directamente potencia a uno o ambos motores.
 ## Motor 1, vector vertical, 10 %
 
 ```powershell
-python run_test.py p00m --motor 1 --power 10 --servo1-angle 35 --servo2-angle 85 --motor-seconds 3
+python run_test.py p00m --motor 1 --power 10 --servo1-angle 35 --servo2-angle 95 --motor-seconds 3
 ```
 
 ## Motor 2
 
 ```powershell
-python run_test.py p00m --motor 2 --power 10 --servo1-angle 35 --servo2-angle 85 --motor-seconds 3
+python run_test.py p00m --motor 2 --power 10 --servo1-angle 35 --servo2-angle 95 --motor-seconds 3
 ```
 
 ## Ambos a 10 %
 
 ```powershell
-python run_test.py p00m --motor both --power 10 --servo1-angle 35 --servo2-angle 85 --motor-seconds 3
+python run_test.py p00m --motor both --power 10 --servo1-angle 35 --servo2-angle 95 --motor-seconds 3
 ```
 
 El script pide:
@@ -1399,7 +1490,7 @@ Servos siempre:
 
 ```text
 S1 = 35°
-S2 = 85°
+S2 = 95°
 ```
 
 Control:
@@ -1480,7 +1571,7 @@ HOLD
 - solo Z tiene autoridad;
 - servos permanecen en:
   ```text
-  35° / 85°
+  35° / 95°
   ```
 - yaw es ignorado;
 - altura debe quedar dentro de la banda configurada;
@@ -1517,7 +1608,7 @@ Los servos se interpolan desde el vector vertical hacia el vector extremo de yaw
 `--yaw-servo-authority` controla cuánto se alejan de:
 
 ```text
-35° / 85°
+35° / 95°
 ```
 
 Ejemplo 30 %:
@@ -1899,7 +1990,7 @@ la máquina de misión queda pausada
 Si está bajo:
 
 ```text
-PID Z + servos 35/85
+PID Z + servos 35/95
 ```
 
 Si está alto:
@@ -2402,16 +2493,16 @@ python run_test.py p01 --seconds 30
 python run_test.py p00 --servo 1 --servo-angle 35 --seconds 10
 ```
 
-## Servo 2 a 85°
+## Servo 2 a 95°
 
 ```powershell
-python run_test.py p00 --servo 2 --servo-angle 85 --seconds 10
+python run_test.py p00 --servo 2 --servo-angle 95 --seconds 10
 ```
 
 ## Motores 10 % vertical
 
 ```powershell
-python run_test.py p00m --motor both --power 10 --servo1-angle 35 --servo2-angle 85 --motor-seconds 3
+python run_test.py p00m --motor both --power 10 --servo1-angle 35 --servo2-angle 95 --motor-seconds 3
 ```
 
 ## Manual
