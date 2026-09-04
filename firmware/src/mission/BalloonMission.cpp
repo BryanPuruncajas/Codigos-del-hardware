@@ -43,8 +43,10 @@ constexpr float DEFAULT_VIS_DEADBAND_PX = 15.0f;  // 105..135 px
 // ============================================================================
 // POTENCIAS DE MOVIMIENTO DE MISION
 // ============================================================================
-// Avance y escape se conservan como en las pruebas validadas.
-constexpr float MOVE_POWER = 0.20f;
+// Avance y escape comparten esta potencia. Bajado de 0.20 a pedido del
+// usuario (04/09): en vuelo se sentia demasiado fuerte tanto yendo hacia el
+// globo como retrocediendo despues de visitarlo.
+constexpr float MOVE_POWER = 0.15f;
 
 // P08/P09 conservaron busqueda al 20% durante su validacion.
 constexpr float SINGLE_TARGET_SEARCH_POWER = 0.20f;
@@ -183,7 +185,14 @@ constexpr float SEARCH_ALT_POWER_FRACTION = 0.5f;
 // ============================================================================
 // Recupera antes de que el error crezca demasiado. Ademas de la banda de
 // posicion, se usa la velocidad vertical para anticipar una caida rapida.
-constexpr float ALTITUDE_ENTER_LOW_M  = 0.05f;  // entra si faltan >5 cm
+// Subido de 0.05 a 0.10 (04/09): en blimp_20260904_143155.csv, varios saltos
+// APPROACH->SEARCH coincidian con la altura apenas 6-7cm bajo el setpoint --
+// dentro de lo que ya se ve como variacion normal del lazo (ver P11, score
+// nunca llegaba a VISIT_SCORE_THRESHOLD porque el supervisor tomaba el
+// control justo al acercarse y el globo se salia de cuadro mientras subia
+// derecho). Con 10cm el supervisor sigue entrando ante caidas reales, pero
+// deja de interrumpir el centrado por ruido normal de +-6-7cm.
+constexpr float ALTITUDE_ENTER_LOW_M  = 0.10f;  // entra si faltan >10 cm
 constexpr float ALTITUDE_ENTER_HIGH_M = 0.18f;  // arriba: descenso pasivo
 constexpr float ALTITUDE_EXIT_BAND_M  = 0.07f;  // retorna a +/-7 cm
 

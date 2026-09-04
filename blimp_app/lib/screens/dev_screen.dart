@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/app_config.dart';
 import '../core/theme/app_theme.dart';
@@ -162,6 +163,8 @@ class _DevScreenState extends State<DevScreen> {
                 ],
               ),
               const SizedBox(height: 12),
+              _SensorDiagnosticPanel(service: service),
+              const SizedBox(height: 12),
               _MissionPanel(service: service),
               const SizedBox(height: 12),
               _ControlPanel(service: service),
@@ -229,6 +232,135 @@ class _DemoBanner extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// PANEL DE DIAGNOSTICO DE SENSORES -- equivalente a correr:
+//   python run_test.py p01 --seconds N
+// P01 no toca motores ni servos (ver P01SensorIntegration.cpp): solo sirve
+// para mirar la telemetria de sensores en el tiempo, p.ej. para ver si la
+// altura del barometro deriva sola con el blimp quieto.
+// ============================================================================
+class _SensorDiagnosticPanel extends StatefulWidget {
+  final TelemetryService service;
+  const _SensorDiagnosticPanel({required this.service});
+
+  @override
+  State<_SensorDiagnosticPanel> createState() => _SensorDiagnosticPanelState();
+}
+
+class _SensorDiagnosticPanelState extends State<_SensorDiagnosticPanel>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  final durationController = TextEditingController(text: '900');
+
+  bool running = false;
+  DateTime? startedAt;
+  Timer? _autoStopTimer;
+  String status = 'Detenido';
+
+  @override
+  void dispose() {
+    durationController.dispose();
+    _autoStopTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _start() async {
+    final seconds = double.tryParse(durationController.text) ?? 900;
+    _autoStopTimer?.cancel();
+    setState(() {
+      running = true;
+      startedAt = DateTime.now();
+      status = 'Corriendo';
+    });
+    // P01 no arma actuadores (ver ACTUATED en common/control_pack.py), asi
+    // que no hace falta pasarle parametros: solo activa el modo en el firmware.
+    await widget.service.startMission(test: 'p01', params: const {});
+    _autoStopTimer = Timer(Duration(seconds: seconds.round()), () {
+      if (mounted) _stop(auto: true);
+    });
+  }
+
+  void _stop({bool auto = false}) {
+    _autoStopTimer?.cancel();
+    widget.service.stop();
+    setState(() {
+      running = false;
+      status = auto ? 'Terminado (duración cumplida) — revisá el CSV en logs/' : 'Detenido (STOP enviado)';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final elapsed = running && startedAt != null
+        ? DateTime.now().difference(startedAt!).inSeconds
+        : 0;
+    final target = double.tryParse(durationController.text)?.round() ?? 900;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.sensors, size: 20, color: AppTheme.blue600),
+                const SizedBox(width: 8),
+                const Text(
+                  'Diagnóstico de sensores (P01)',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.onSurface),
+                ),
+              ],
+            ),
+            const Divider(),
+            const Text(
+              'Sin motores ni servos. Dejá el blimp completamente quieto y '
+              'mirá el gráfico "Altura en vivo" más abajo para ver si deriva '
+              'sola con el tiempo.',
+              style: TextStyle(color: AppTheme.onSurfaceMuted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    controller: durationController,
+                    enabled: !running,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Duración (s)', isDense: true),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton.icon(
+                  onPressed: running ? null : _start,
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Iniciar P01'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: running ? () => _stop() : null,
+                  icon: const Icon(Icons.stop),
+                  label: const Text('Detener'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              running ? '$status  ·  $elapsed s / $target s' : status,
+              style: TextStyle(color: AppTheme.onSurface.withValues(alpha: 0.7), fontSize: 13),
+            ),
+          ],
+        ),
       ),
     );
   }
