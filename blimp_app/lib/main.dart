@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'core/prefs.dart';
 import 'core/theme/app_theme.dart';
 import 'screens/home_screen.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Prefs.init();
   runApp(const BlimpApp());
 }
 

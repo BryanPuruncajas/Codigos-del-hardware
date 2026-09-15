@@ -94,7 +94,8 @@ constexpr float DEFAULT_DEADBAND_PX = 20.0f;
 //
 // Si algun dia se cambia el IMU, la orientacion de la camara o la conversion
 // a Euler, hay que volver a medirlo: correlacionar fx_cmd (error en px) con
-// el signo de (servo1 - 35) sobre un vuelo con el objetivo bien detectado.
+// el signo de (servo1 - SERVO1_Z_DEG) sobre un vuelo con el objetivo bien
+// detectado.
 constexpr float VISION_YAW_SIGN = -1.0f;
 
 // Sin deteccion durante este tiempo se descarta la referencia y el vehiculo
@@ -197,8 +198,8 @@ void dumpConfig(const Config& cfg) {
 
 int pulse(float deg) {
     return degreesToPulseUs(deg,
-                            AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG,
-                            AppConfig::P0025_MIN_US, AppConfig::P0025_MAX_US);
+                            AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG,
+                            AppConfig::SERVO_PULSE_MIN_US, AppConfig::SERVO_PULSE_MAX_US);
 }
 
 
@@ -344,8 +345,8 @@ void p07VisualCenter(AppContext& ctx) {
     servo1Deg = rateLimit(servo1Deg, ctrl.lastServo1, SERVO_SLEW_DEG_PER_S, dt);
     servo2Deg = rateLimit(servo2Deg, ctrl.lastServo2, SERVO_SLEW_DEG_PER_S, dt);
 
-    servo1Deg = constrain(servo1Deg, AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG);
-    servo2Deg = constrain(servo2Deg, AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG);
+    servo1Deg = constrain(servo1Deg, AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG);
+    servo2Deg = constrain(servo2Deg, AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG);
 
     ctrl.lastServo1 = servo1Deg;
     ctrl.lastServo2 = servo2Deg;

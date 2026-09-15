@@ -36,13 +36,29 @@ constexpr int PARAM_ARM = 10;
 constexpr int PARAM_RELOAD = 11;
 constexpr int PARAM_RESET = 12;
 
-// K-Power P0025: 0..120 deg nominales = 900..2100 us.
-constexpr int P0025_MIN_US = 900;
-constexpr int P0025_CENTER_US = 1500;
-constexpr int P0025_MAX_US = 2100;
-constexpr float P0025_MIN_DEG = 0.0f;
-constexpr float P0025_CENTER_DEG = 60.0f;
-constexpr float P0025_MAX_DEG = 120.0f;
+// Tower Pro (micro servo instalado, 04/09): 0..180 deg nominales =
+// 500..2400 us, segun el datasheet real del servo (ver conversacion: la
+// pagina del vendedor listaba esto en las specs, aunque el diagrama
+// generico de la misma pagina decia 1000..2000 -- se descarto ese por ser
+// una imagen de stock reciclada, no medida contra este servo puntual).
+//
+// El 13/09 con 500..2400 el brazo parecia quedarse ~20 grados corto en
+// cada extremo SIN zumbar -- pero esa prueba se hizo con un bug real
+// todavia activo (ver RawBicopter.cpp): un clamp separado, hardcodeado en
+// 900-2100 (el rango del P0025 viejo), que angostaba CUALQUIER rango de
+// aca por mas ancho que fuera. Con ese bug corregido, volvemos al numero
+// real del datasheet (500-2400) para volver a probar desde cero.
+//
+// OJO: esto SOLO define el mapeo grado-logico -> pulso electrico. Los
+// angulos de geometria (vertical, avance, retroceso, giro) en
+// ControlCommon.h siguen siendo los que se validaron en vuelo con el
+// P0025 -- hay que re-validarlos con P00 antes de volar ninguna mision.
+constexpr int SERVO_PULSE_MIN_US = 500;
+constexpr int SERVO_PULSE_CENTER_US = 1450;
+constexpr int SERVO_PULSE_MAX_US = 2400;
+constexpr float SERVO_ANGLE_MIN_DEG = 0.0f;
+constexpr float SERVO_ANGLE_CENTER_DEG = 90.0f;
+constexpr float SERVO_ANGLE_MAX_DEG = 180.0f;
 
 enum Mode : int {
     SAFE_STOP = 0,

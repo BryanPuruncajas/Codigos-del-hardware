@@ -33,7 +33,8 @@
 //     piso alto se traga el termino proporcional y convierte el lazo en un
 //     rele de dos estados que parece estable pero no esta sintonizado.
 //
-// Como los servos se quedan siempre en el vector vertical (35/85), etaZ = 1 y
+// Como los servos se quedan siempre en el vector vertical (SERVO*_Z_DEG en
+// ControlCommon.h, 90/90 con el servo actual), etaZ = 1 y
 // la demanda de empuje es identica a la potencia de motor. Por eso este test
 // es el banco limpio para sacar kp/ki/kd: sin yaw, sin mixer, sin acoplamiento.
 //
@@ -121,8 +122,8 @@ void dumpConfig(const Config& cfg) {
  
 int pulse(float deg) {
     return degreesToPulseUs(deg,
-                            AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG,
-                            AppConfig::P0025_MIN_US, AppConfig::P0025_MAX_US);
+                            AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG,
+                            AppConfig::SERVO_PULSE_MIN_US, AppConfig::SERVO_PULSE_MAX_US);
 }
  
  

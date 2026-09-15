@@ -59,9 +59,11 @@
 // durante el giro. Se minimiza con autoridad alta y con el maxPower de yaw lo
 // mas bajo posible que aun gire.
 //
-// Ademas, desde Z el servo 1 recorre 35 grados hasta su extremo y el servo 2
-// recorre 85. El giro no es una cupla pura: hay fuerza lateral neta y el blimp
-// deriva mientras gira. Es geometria del montaje.
+// Esto era cierto con el P0025 (asimetria 35/85 de montaje: el giro no era
+// una cupla pura, habia fuerza lateral neta y el blimp derivaba). Con el
+// Tower Pro la geometria por ahora es simetrica (SERVO1_Z_DEG=SERVO2_Z_DEG=90
+// en ControlCommon.h) -- falta confirmar en vuelo si sigue habiendo asimetria
+// de montaje o no.
 //
 //
 // SLOTS DE ControlInput  (los 9 huecos utiles estan ocupados)
@@ -209,8 +211,8 @@ void dumpConfig(const Config& cfg) {
 
 int pulse(float deg) {
     return degreesToPulseUs(deg,
-                            AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG,
-                            AppConfig::P0025_MIN_US, AppConfig::P0025_MAX_US);
+                            AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG,
+                            AppConfig::SERVO_PULSE_MIN_US, AppConfig::SERVO_PULSE_MAX_US);
 }
 
 
@@ -412,8 +414,8 @@ void p05YawAltitude(AppContext& ctx) {
     servo1Deg = rateLimit(servo1Deg, ctrl.lastServo1, SERVO_SLEW_DEG_PER_S, dt);
     servo2Deg = rateLimit(servo2Deg, ctrl.lastServo2, SERVO_SLEW_DEG_PER_S, dt);
 
-    servo1Deg = constrain(servo1Deg, AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG);
-    servo2Deg = constrain(servo2Deg, AppConfig::P0025_MIN_DEG, AppConfig::P0025_MAX_DEG);
+    servo1Deg = constrain(servo1Deg, AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG);
+    servo2Deg = constrain(servo2Deg, AppConfig::SERVO_ANGLE_MIN_DEG, AppConfig::SERVO_ANGLE_MAX_DEG);
 
     ctrl.lastServo1 = servo1Deg;
     ctrl.lastServo2 = servo2Deg;

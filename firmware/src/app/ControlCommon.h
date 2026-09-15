@@ -69,21 +69,34 @@
 namespace ControlCommon {
 
 // ============================================================================
-// GEOMETRIA DE LOS SERVOS  (posiciones validadas fisicamente en P00/P02)
+// GEOMETRIA DE LOS SERVOS
 // ============================================================================
+// PENDIENTE DE RE-VALIDAR (04/09): estos valores estaban medidos en vuelo
+// para el K-Power P0025 (rango 0..120). Tras el cambio a SG90 (rango 0..180,
+// ver AppConfig.h) los numeros se escalaron a los NUEVOS extremos (0 sigue
+// siendo 0; el viejo extremo 120 ahora es 180) y el vertical +Z se puso en
+// el centro simetrico 90/90 -- pero son valores de arranque, NO medidos en
+// vuelo todavia. Hay que volver a correr P00/P02/P03 con el SG90 montado
+// antes de confiar en ellos para una mision real.
 //
-//   Vector vertical +Z : S1=35   S2=95
-//   Giro izquierda     : S1=0    S2=0
-//   Giro derecha       : S1=120  S2=120
+//   Vector vertical +Z : S1=90   S2=90   (sin validar todavia)
+//   Giro izquierda     : S1=0    S2=0    (sin re-validar)
+//   Giro derecha       : S1=180  S2=180  (sin re-validar)
 //
-// OJO CON LA ASIMETRIA: desde Z, el servo 1 recorre 35 grados hasta su extremo
-// y el servo 2 recorre 95. Con autoridad alta los angulos quedan muy distintos
-// (phi1=-35, phi2=+95), asi que el giro NO es una cupla pura: hay una fuerza
-// lateral neta y el blimp deriva mientras gira. Es geometria del montaje, no
-// se arregla en software. Caracterizala con P03 antes de pasar a P07.
+// Con el P0025, desde Z el servo 1 recorria 35 grados hasta su extremo y el
+// servo 2 recorria 95: esa asimetria de montaje hacia que el giro no fuera
+// una cupla pura (fuerza lateral neta, el blimp derivaba mientras giraba).
+// Con el SG90 hay que volver a medir si existe la misma asimetria o no.
 // ============================================================================
 
-constexpr float SERVO1_Z_DEG     = 35.0f;
+// SG90 (04/09): puesto en 90/90 -- el centro simetrico del nuevo rango
+// 0..180 -- como punto de partida limpio con el servo recien montado. La
+// asimetria 35/95 de aca abajo era una correccion medida en vuelo
+// ESPECIFICA del P0025 viejo (gondola desalineada 10 grados); no hay
+// ninguna razon para asumir que el SG90, montado de nuevo, tenga el mismo
+// desalineamiento. Falta volver a medir con P00/P03 si 90/90 realmente
+// sale vertical sin girar solo, o si hace falta corregir de nuevo.
+constexpr float SERVO1_Z_DEG     = 90.0f;
 
 // VERTICAL REAL DE LA GONDOLA IZQUIERDA
 // -------------------------------------
@@ -105,19 +118,22 @@ constexpr float SERVO1_Z_DEG     = 35.0f;
 //
 // Pendiente: confirmar si el optimo esta exactamente en 95 (probar 91 y 99) y
 // si conviene enderezar la gondola mecanicamente en vez de compensarla aqui.
-constexpr float SERVO2_Z_DEG     = 95.0f;
+constexpr float SERVO2_Z_DEG     = 90.0f;
+// SG90 (04/09): el extremo "0" no cambia (sigue siendo 0 en el rango nuevo),
+// pero el extremo "120" del P0025 viejo ahora es 180 -- el SG90 llega hasta
+// ahi. Sin re-validar en vuelo, igual que el resto de esta geometria.
 constexpr float SERVO1_LEFT_DEG  = 0.0f;
 constexpr float SERVO2_LEFT_DEG  = 0.0f;
-constexpr float SERVO1_RIGHT_DEG = 120.0f;
-constexpr float SERVO2_RIGHT_DEG = 120.0f;
+constexpr float SERVO1_RIGHT_DEG = 180.0f;
+constexpr float SERVO2_RIGHT_DEG = 180.0f;
 
 // Traslacion horizontal: las dos gondolas se inclinan en el MISMO sentido
 // fisico, asi que sus comandos van a extremos opuestos (montaje en espejo).
 // Las usan P02 (manual) y BalloonMission.
-constexpr float SERVO1_FORWARD_DEG = 120.0f;
+constexpr float SERVO1_FORWARD_DEG = 180.0f;
 constexpr float SERVO2_FORWARD_DEG = 0.0f;
 constexpr float SERVO1_BACK_DEG    = 0.0f;
-constexpr float SERVO2_BACK_DEG    = 120.0f;
+constexpr float SERVO2_BACK_DEG    = 180.0f;
 
 constexpr float DEG2RAD = PI / 180.0f;
 constexpr float RAD2DEG = 180.0f / PI;
@@ -538,22 +554,30 @@ inline int degreesToPulseUs(float deg,
 // ============================================================================
 // EFICIENCIAS REALES DEL CONJUNTO
 //
-//   phi1 = servo1 - 35        (inclinacion de la gondola 1 respecto de Z)
-//   phi2 = 85 - servo2        (montaje en espejo)
+// Tabla recalculada el 13/09 con la geometria simetrica provisional del
+// Tower Pro (SERVO1_Z_DEG=SERVO2_Z_DEG=90, LEFT/RIGHT=0/180) -- SIN VALIDAR
+// EN VUELO todavia. Con geometria simetrica, phi1=-phi2 siempre, asi que
+// etaZ=cos(m*90deg) y etaYaw=sin(m*90deg) exactos (antes, con el P0025
+// asimetrico 35/85, phi1 y phi2 no eran iguales y la tabla salia irregular).
+//
+//   phi1 = servo1 - SERVO1_Z_DEG   (inclinacion de la gondola 1 respecto de Z)
+//   phi2 = SERVO2_Z_DEG - servo2   (montaje en espejo)
 //
 //   etaZ   = componente vertical media -> sustentacion por unidad de potencia
 //   etaYaw = componente lateral media  -> par de yaw por unidad de potencia
 //
 //   blend   S1     S2     etaZ    etaYaw
-//   0.00   35.0   85.0    1.000   0.000
-//   0.30   24.5   59.5    0.943   0.306
-//   0.50   17.5   42.5    0.845   0.488
-//   0.75    8.8   23.8    0.749   0.667
-//   1.00    0.0    0.0    0.453   0.785
+//   0.00   90.0   90.0    1.000   0.000
+//   0.30   63.0   63.0    0.891   0.454
+//   0.50   45.0   45.0    0.707   0.707
+//   0.75   22.5   22.5    0.383   0.924
+//   1.00    0.0    0.0    0.000   1.000
 //
-// Girar SIEMPRE empuja un poco hacia arriba (etaZ > 0 siempre). El lazo de
-// altura solo puede compensarlo bajando su propia demanda hasta 0. Se minimiza
-// con blend alto y maxPower de yaw lo mas bajo posible que aun gire.
+// Girar SIEMPRE empuja un poco hacia arriba (etaZ > 0 siempre, excepto en el
+// extremo blend=1.0 donde ahora da 0 -- distinto del comportamiento asimetrico
+// viejo, donde nunca llegaba a 0). El lazo de altura solo puede compensarlo
+// bajando su propia demanda hasta 0. Se minimiza con blend alto y maxPower de
+// yaw lo mas bajo posible que aun gire.
 // ============================================================================
 
 inline void computeEfficiencies(float servo1Deg, float servo2Deg,
@@ -570,8 +594,8 @@ inline void computeEfficiencies(float servo1Deg, float servo2Deg,
 }
 
 
-// blend > 0 : izquierda / antihorario (servos hacia 0)
-// blend < 0 : derecha / horario       (servos hacia 120)
+// blend > 0 : izquierda / antihorario (servos hacia SERVO*_LEFT_DEG, 0)
+// blend < 0 : derecha / horario       (servos hacia SERVO*_RIGHT_DEG, 180)
 inline void servosFromBlend(float blend, float& servo1Deg, float& servo2Deg) {
 
     const float m = constrain(fabsf(blend), 0.0f, 1.0f);

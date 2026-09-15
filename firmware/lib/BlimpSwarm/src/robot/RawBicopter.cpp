@@ -1,4 +1,5 @@
 #include "RawBicopter.h"
+#include "app/AppConfig.h"
 #include <Arduino.h>
 
 #define SERVO1 D0
@@ -113,18 +114,27 @@ void RawBicopter::setServoCalibrationEnabled(bool enabledState){
 void RawBicopter::commandServoCalibrationUs(int servo1Us,int servo2Us){
     if(actuatorsArmed || servoCalibrationSelection==0) return;
 
+    // BUG encontrado el 13/09: este clamp estaba hardcodeado en 900-2100 (el
+    // rango del P0025 viejo), separado de AppConfig::SERVO_PULSE_MIN_US/MAX_US
+    // y del clamp de AServo.cpp. Por mas que se ensanchara el rango arriba,
+    // ESTE clamp lo volvia a angostar antes de llegar al servo -- el motivo
+    // real de que el SG90/Tower Pro nunca llegara a sus extremos comandados
+    // en ninguna de las pruebas de P00 durante la recalibracion.
     if(servoCalibrationSelection==1 || servoCalibrationSelection==3)
-        servo1->actMicroseconds(constrain(servo1Us,900,2100));
+        servo1->actMicroseconds(constrain(servo1Us,AppConfig::SERVO_PULSE_MIN_US,AppConfig::SERVO_PULSE_MAX_US));
 
     if(servoCalibrationSelection==2 || servoCalibrationSelection==3)
-        servo2->actMicroseconds(constrain(servo2Us,900,2100));
+        servo2->actMicroseconds(constrain(servo2Us,AppConfig::SERVO_PULSE_MIN_US,AppConfig::SERVO_PULSE_MAX_US));
 }
 
 void RawBicopter::commandMotorPowerTest(float motor1Power,float motor2Power,int servo1Us,int servo2Us){
     if(!actuatorsArmed || servoCalibrationSelection!=0) return;
 
-    servo1Us=constrain(servo1Us,900,2100);
-    servo2Us=constrain(servo2Us,900,2100);
+    // Mismo bug que en commandServoCalibrationUs de arriba: clamp fijo en
+    // 900-2100 (P0025 viejo), ahora referenciando AppConfig para no
+    // desincronizarse de nuevo si el rango se vuelve a recalibrar.
+    servo1Us=constrain(servo1Us,AppConfig::SERVO_PULSE_MIN_US,AppConfig::SERVO_PULSE_MAX_US);
+    servo2Us=constrain(servo2Us,AppConfig::SERVO_PULSE_MIN_US,AppConfig::SERVO_PULSE_MAX_US);
     motor1Power=constrain(motor1Power,0.0f,motorPowerLimit);
     motor2Power=constrain(motor2Power,0.0f,motorPowerLimit);
 

@@ -5,24 +5,24 @@
 
 namespace {
 int degreesToPulseUs(float deg){
-    const float clipped=constrain(deg,AppConfig::P0025_MIN_DEG,AppConfig::P0025_MAX_DEG);
-    const float spanDeg=AppConfig::P0025_MAX_DEG-AppConfig::P0025_MIN_DEG;
-    const float spanUs=(float)(AppConfig::P0025_MAX_US-AppConfig::P0025_MIN_US);
-    return (int)lroundf(AppConfig::P0025_MIN_US+
-                       (clipped-AppConfig::P0025_MIN_DEG)*spanUs/spanDeg);
+    const float clipped=constrain(deg,AppConfig::SERVO_ANGLE_MIN_DEG,AppConfig::SERVO_ANGLE_MAX_DEG);
+    const float spanDeg=AppConfig::SERVO_ANGLE_MAX_DEG-AppConfig::SERVO_ANGLE_MIN_DEG;
+    const float spanUs=(float)(AppConfig::SERVO_PULSE_MAX_US-AppConfig::SERVO_PULSE_MIN_US);
+    return (int)lroundf(AppConfig::SERVO_PULSE_MIN_US+
+                       (clipped-AppConfig::SERVO_ANGLE_MIN_DEG)*spanUs/spanDeg);
 }
 }
 
 namespace TestRunners {
 void p00MotorPower(AppContext& ctx){
-    // AUX0 = angulo S1 [0..120]
-    // AUX1 = angulo S2 [0..120]
+    // AUX0 = angulo S1 [0..180]
+    // AUX1 = angulo S2 [0..180]
     // AUX2 = potencia M1 [0..1]  (misma escala que firmware viejo)
     // AUX3 = potencia M2 [0..1]
     const float s1Deg=constrain(ctx.command.params[AppConfig::PARAM_AUX0],
-                                AppConfig::P0025_MIN_DEG,AppConfig::P0025_MAX_DEG);
+                                AppConfig::SERVO_ANGLE_MIN_DEG,AppConfig::SERVO_ANGLE_MAX_DEG);
     const float s2Deg=constrain(ctx.command.params[AppConfig::PARAM_AUX1],
-                                AppConfig::P0025_MIN_DEG,AppConfig::P0025_MAX_DEG);
+                                AppConfig::SERVO_ANGLE_MIN_DEG,AppConfig::SERVO_ANGLE_MAX_DEG);
     const float m1=constrain(ctx.command.params[AppConfig::PARAM_AUX2],
                              0.0f,AppConfig::ABSOLUTE_MOTOR_POWER_LIMIT);
     const float m2=constrain(ctx.command.params[AppConfig::PARAM_AUX3],

@@ -99,14 +99,14 @@ logica NO pasa por common/control_pack.py (P00/P00M no usan el empaquetado
 ALT_PACK/YAW_PACK ni el mapa de slots de P03-P11): son modos crudos con
 selector de servo / potencia directa, asi que se arman aca mismo.
 
-    {"cmd": "servo_set", "servo": "both", "angle1": 35, "angle2": 95}
+    {"cmd": "servo_set", "servo": "both", "angle1": 90, "angle2": 90}
                                                         # servo: '1'|'2'|'both'
 
 Si "servo" es '1' o '2', mueve SOLO ese servo (el otro queda detach, igual
 que la CLI). Si es 'both', mueve LOS DOS con sus propios angle1/angle2 --
-casi nunca deben ser iguales: los servos van en espejo, asi que el vector
-vertical real es 35/95 (no 35/35), avance 120/0, retroceso 0/120 (ver
-SERVO*_Z_DEG/FORWARD_DEG/BACK_DEG en firmware/src/app/ControlCommon.h).
+con el SG90 (rango 0..180) el vertical de arranque es 90/90 (centro
+simetrico, sin re-validar en vuelo todavia), avance 180/0, retroceso 0/180
+(ver SERVO*_Z_DEG/FORWARD_DEG/BACK_DEG en firmware/src/app/ControlCommon.h).
 Sirve para chequear a mano si el vector de empuje resultante apunta donde
 deberia.
 
@@ -322,17 +322,17 @@ def make_handler(link: BlimpLink, dev_token: str):
                     elif cmd == 'servo_set':
                         # P00: si servo es '1'/'2', mueve SOLO ese servo (el
                         # otro queda detach). Si es 'both', mueve los DOS a
-                        # la vez con SUS PROPIOS angulos -- angle1/angle2
-                        # casi nunca son iguales, porque los servos van en
-                        # espejo (el vector vertical real es 35/95, no
-                        # 35/35; ver SERVO*_Z_DEG en ControlCommon.h).
+                        # la vez con SUS PROPIOS angulos. Con el SG90 (04/09,
+                        # rango 0..180) el default es 90/90 -- centro
+                        # simetrico sin re-validar en vuelo todavia; ver
+                        # SERVO*_Z_DEG en ControlCommon.h.
                         servo = str(msg.get('servo', 'both'))
-                        angle1 = float(msg.get('angle1', 35.0))
-                        angle2 = float(msg.get('angle2', 95.0))
-                        if not (0.0 <= angle1 <= 120.0 and 0.0 <= angle2 <= 120.0):
+                        angle1 = float(msg.get('angle1', 90.0))
+                        angle2 = float(msg.get('angle2', 90.0))
+                        if not (0.0 <= angle1 <= 180.0 and 0.0 <= angle2 <= 180.0):
                             await ws.send(json.dumps({
                                 'cmd_ok': False, 'cmd': cmd,
-                                'error': 'angle1/angle2 deben estar entre 0 y 120 grados',
+                                'error': 'angle1/angle2 deben estar entre 0 y 180 grados',
                             }))
                             continue
                         selector = {'1': 1.0, '2': 2.0, 'both': 3.0}.get(servo)
@@ -357,12 +357,12 @@ def make_handler(link: BlimpLink, dev_token: str):
                         # A diferencia de la CLI (que usa el tiempo que tarda
                         # el humano en escribir "ARMAR" como colchon), aca
                         # esperamos explicito antes de responder cmd_ok.
-                        s1 = float(msg.get('servo1', 35.0))
-                        s2 = float(msg.get('servo2', 95.0))
-                        if not (0.0 <= s1 <= 120.0 and 0.0 <= s2 <= 120.0):
+                        s1 = float(msg.get('servo1', 90.0))
+                        s2 = float(msg.get('servo2', 90.0))
+                        if not (0.0 <= s1 <= 180.0 and 0.0 <= s2 <= 180.0):
                             await ws.send(json.dumps({
                                 'cmd_ok': False, 'cmd': cmd,
-                                'error': 'servo1/servo2 deben estar entre 0 y 120 grados',
+                                'error': 'servo1/servo2 deben estar entre 0 y 180 grados',
                             }))
                             continue
                         await write_control(link, mac, mode=NAME_TO_MODE['p00'],

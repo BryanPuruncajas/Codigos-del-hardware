@@ -45,12 +45,13 @@ import numpy as np
 # GEOMETRIA  -  debe coincidir con firmware/src/app/ControlCommon.h
 # ============================================================================
 
-SERVO1_Z_DEG = 35.0
-SERVO2_Z_DEG = 95.0
-# Corregido el 24/08: 85.0 era el valor OBSOLETO de la gondola izquierda
-# desalineada (ver BalloonMission.cpp). Con 85 aca la reconstruccion de
-# etaZ/empuje vertical quedaba mal para cualquier corrida posterior a esa
-# calibracion, aunque la altura cruda se graficara bien.
+SERVO1_Z_DEG = 90.0
+SERVO2_Z_DEG = 90.0
+# Actualizado el 04/09 al cambiar de K-Power P0025 a SG90 (rango 0..180,
+# ver ControlCommon.h): 90/90 es el centro simetrico de arranque, sin
+# re-validar en vuelo todavia. El valor viejo (35/95) era especifico del
+# P0025 con la gondola izquierda desalineada -- no confundir logs de antes
+# y despues de este cambio al comparar corridas con analyze.py.
 
 MODE_NAMES = {
     0: 'SAFE_STOP', 8: 'P00M', 9: 'P00', 10: 'P01', 11: 'P02',
@@ -707,7 +708,7 @@ def plot_yaw(runs, band_deg, save, show):
     ax2.set_xlabel('tiempo desde ARM [s]')
     ax2.grid(alpha=0.3)
     ax2.set_title('Servo 1 (solida) y Servo 2 (punteada); '
-                  'lineas grises = vector vertical 35/95', fontsize=9)
+                  'lineas grises = vector vertical 90/90', fontsize=9)
 
     fig.tight_layout()
     _finish(fig, 'yaw', save, show)

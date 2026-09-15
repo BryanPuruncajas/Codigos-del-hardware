@@ -317,13 +317,13 @@ float wrapPi(float angle) {
 
 int degreesToPulseUs(float deg) {
     const float clipped = constrain(deg,
-                                    AppConfig::P0025_MIN_DEG,
-                                    AppConfig::P0025_MAX_DEG);
-    const float spanDeg = AppConfig::P0025_MAX_DEG - AppConfig::P0025_MIN_DEG;
-    const float spanUs = (float)(AppConfig::P0025_MAX_US - AppConfig::P0025_MIN_US);
+                                    AppConfig::SERVO_ANGLE_MIN_DEG,
+                                    AppConfig::SERVO_ANGLE_MAX_DEG);
+    const float spanDeg = AppConfig::SERVO_ANGLE_MAX_DEG - AppConfig::SERVO_ANGLE_MIN_DEG;
+    const float spanUs = (float)(AppConfig::SERVO_PULSE_MAX_US - AppConfig::SERVO_PULSE_MIN_US);
 
-    return (int)lroundf(AppConfig::P0025_MIN_US +
-                        (clipped - AppConfig::P0025_MIN_DEG) * spanUs / spanDeg);
+    return (int)lroundf(AppConfig::SERVO_PULSE_MIN_US +
+                        (clipped - AppConfig::SERVO_ANGLE_MIN_DEG) * spanUs / spanDeg);
 }
 
 void applyPhysicalCommand(AppContext& ctx,

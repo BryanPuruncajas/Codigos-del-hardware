@@ -5,23 +5,23 @@
 
 namespace {
 int degreesToPulseUs(float deg){
-    const float clipped=constrain(deg,AppConfig::P0025_MIN_DEG,AppConfig::P0025_MAX_DEG);
-    const float spanDeg=AppConfig::P0025_MAX_DEG-AppConfig::P0025_MIN_DEG;
-    const float spanUs=(float)(AppConfig::P0025_MAX_US-AppConfig::P0025_MIN_US);
-    return (int)lroundf(AppConfig::P0025_MIN_US+
-                       (clipped-AppConfig::P0025_MIN_DEG)*spanUs/spanDeg);
+    const float clipped=constrain(deg,AppConfig::SERVO_ANGLE_MIN_DEG,AppConfig::SERVO_ANGLE_MAX_DEG);
+    const float spanDeg=AppConfig::SERVO_ANGLE_MAX_DEG-AppConfig::SERVO_ANGLE_MIN_DEG;
+    const float spanUs=(float)(AppConfig::SERVO_PULSE_MAX_US-AppConfig::SERVO_PULSE_MIN_US);
+    return (int)lroundf(AppConfig::SERVO_PULSE_MIN_US+
+                       (clipped-AppConfig::SERVO_ANGLE_MIN_DEG)*spanUs/spanDeg);
 }
 }
 
 namespace TestRunners {
 void p00ServoCalibration(AppContext& ctx){
-    // AUX0 = angulo S1 0..120
-    // AUX1 = angulo S2 0..120
+    // AUX0 = angulo S1 0..180
+    // AUX1 = angulo S2 0..180
     // AUX2 = selector: 1=S1, 2=S2, 3=ambos
     const float s1Deg=constrain(ctx.command.params[AppConfig::PARAM_AUX0],
-                                AppConfig::P0025_MIN_DEG,AppConfig::P0025_MAX_DEG);
+                                AppConfig::SERVO_ANGLE_MIN_DEG,AppConfig::SERVO_ANGLE_MAX_DEG);
     const float s2Deg=constrain(ctx.command.params[AppConfig::PARAM_AUX1],
-                                AppConfig::P0025_MIN_DEG,AppConfig::P0025_MAX_DEG);
+                                AppConfig::SERVO_ANGLE_MIN_DEG,AppConfig::SERVO_ANGLE_MAX_DEG);
     const int selection=constrain((int)lroundf(ctx.command.params[AppConfig::PARAM_AUX2]),1,3);
 
     const int s1Us=degreesToPulseUs(s1Deg);

@@ -26,7 +26,7 @@ def listen(link,seconds,logger):
 EPILOG = """\
 SECUENCIA RECOMENDADA DE CARACTERIZACION
 
-  1. p00m   potencia de hover en lazo abierto (servos 35/95, sin controlador).
+  1. p00m   potencia de hover en lazo abierto (servos 90/90, sin controlador).
              Es el numero que ancla todo lo demas.
   2. p04     altura aislada. Mismo lazo que P05: las ganancias transfieren.
   3. p03     yaw aislado. Misma arquitectura y unidades que P05.
@@ -278,14 +278,14 @@ def main():
         s2=args.servo2_angle if args.servo2_angle is not None else args.servo_angle
         if s1 is None or s2 is None:
             raise SystemExit('P00M requiere --servo-angle, o ambos --servo1-angle y --servo2-angle.')
-        if not (0.0 <= s1 <= 120.0 and 0.0 <= s2 <= 120.0):
-            raise SystemExit('Los angulos P00M deben estar entre 0 y 120 grados.')
+        if not (0.0 <= s1 <= 180.0 and 0.0 <= s2 <= 180.0):
+            raise SystemExit('Los angulos P00M deben estar entre 0 y 180 grados.')
 
     if args.test=='p00':
         if not (1 <= args.servo_step <= 10):
             raise SystemExit('--servo-step debe estar entre 1 y 10 grados.')
-        if args.servo_angle is not None and not (0.0 <= args.servo_angle <= 120.0):
-            raise SystemExit('--servo-angle debe estar entre 0 y 120 grados.')
+        if args.servo_angle is not None and not (0.0 <= args.servo_angle <= 180.0):
+            raise SystemExit('--servo-angle debe estar entre 0 y 180 grados.')
 
     mac=ROBOT_MACS[0]
     link=BlimpLink(SERIAL_PORT)
@@ -306,12 +306,12 @@ def main():
             print('\nP00 SERVO CALIBRATION')
             print('Brushless BLOQUEADOS.')
             print(f'Servo seleccionado: {args.servo}. El otro no recibira PWM.')
-            print('P0025 nominal: 0..120° = 900..2100 us; 60° = 1500 us.')
+            print('Servo nominal (datasheet): 0..180° = 500..2400 us; 90° = 1450 us.')
             accion='la posicion fija' if args.servo_angle is not None else 'el barrido'
             if input(f'Escribe SERVO para iniciar {accion}: ').strip().upper()!='SERVO':
                 raise SystemExit('Cancelado.')
 
-            s1=s2=60.0
+            s1=s2=90.0
 
             def send_selected(a1,a2):
                 return link.control(mac,mode=mode,aux={5:float(a1),6:float(a2),7:float(selection)})
@@ -332,8 +332,8 @@ def main():
             else:
                 def sweep_one(which):
                     nonlocal s1,s2
-                    print(f'\nServo {which}: 60° -> 0°')
-                    for a in range(60,-1,-args.servo_step):
+                    print(f'\nServo {which}: 90° -> 0°')
+                    for a in range(90,-1,-args.servo_step):
                         if which==1: s1=a
                         else: s2=a
                         send_selected(s1,s2)
@@ -341,8 +341,8 @@ def main():
                         time.sleep(args.servo_delay)
                     time.sleep(0.5)
 
-                    print(f'\nServo {which}: 0° -> 120°')
-                    for a in range(0,121,args.servo_step):
+                    print(f'\nServo {which}: 0° -> 180°')
+                    for a in range(0,181,args.servo_step):
                         if which==1: s1=a
                         else: s2=a
                         send_selected(s1,s2)
@@ -350,16 +350,16 @@ def main():
                         time.sleep(args.servo_delay)
                     time.sleep(0.5)
 
-                    print(f'\nServo {which}: vuelve a 60°')
-                    for a in range(120,59,-args.servo_step):
+                    print(f'\nServo {which}: vuelve a 90°')
+                    for a in range(180,89,-args.servo_step):
                         if which==1: s1=a
                         else: s2=a
                         send_selected(s1,s2)
                         time.sleep(args.servo_delay)
-                    if which==1: s1=60.0
-                    else: s2=60.0
+                    if which==1: s1=90.0
+                    else: s2=90.0
                     print(send_selected(s1,s2))
-                    print(f'Servo {which} en 60° / 1500 us.')
+                    print(f'Servo {which} en 90° / 1500 us.')
 
                 if selection in {1,3}: sweep_one(1)
                 if selection in {2,3}: sweep_one(2)
@@ -385,7 +385,7 @@ def main():
             print('\nP00M MOTOR POWER TEST')
             print('Control DIRECTO: sin PID ni mixer.')
             print('100% corresponde a la misma escala maxima 0..1 del firmware viejo.')
-            print('Para medir la POTENCIA DE HOVER: servos en 35/95 y sube la potencia')
+            print('Para medir la POTENCIA DE HOVER: servos en 90/90 y sube la potencia')
             print('hasta que el blimp no suba ni baje. Ese numero es el que ancla')
             print('--alt-min-power, --max-power y --yaw-base-power.')
             print('')

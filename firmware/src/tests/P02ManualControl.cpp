@@ -35,15 +35,25 @@ using ControlCommon::SERVO2_BACK_DEG;
 constexpr float P02_MOTOR_POWER = 0.20f;
 constexpr float COMMAND_DEADBAND = 0.001f;
 
+// Magnitud de fx/tz que corresponde a POTENCIA MAXIMA (P02_MOTOR_POWER).
+// Son los mismos valores que ya mandaban los botones fijos de la app/CLI
+// (fx=+/-0.12, tz=+/-0.05): con eso, un mando/joystick a fondo llega
+// exactamente a la potencia ya validada, y a mitad de camino llega a la
+// mitad -- antes cualquier magnitud por encima del deadband disparaba
+// siempre el 100%, así que un joystick no aportaba nada sobre un boton.
+constexpr float P02_FX_FULL_SCALE = 0.12f;
+constexpr float P02_TZ_FULL_SCALE = 0.05f;
+constexpr float P02_FZ_FULL_SCALE = 0.12f;
+
 int degreesToPulseUs(float deg) {
     const float clipped = constrain(deg,
-                                    AppConfig::P0025_MIN_DEG,
-                                    AppConfig::P0025_MAX_DEG);
-    const float spanDeg = AppConfig::P0025_MAX_DEG - AppConfig::P0025_MIN_DEG;
-    const float spanUs = (float)(AppConfig::P0025_MAX_US - AppConfig::P0025_MIN_US);
+                                    AppConfig::SERVO_ANGLE_MIN_DEG,
+                                    AppConfig::SERVO_ANGLE_MAX_DEG);
+    const float spanDeg = AppConfig::SERVO_ANGLE_MAX_DEG - AppConfig::SERVO_ANGLE_MIN_DEG;
+    const float spanUs = (float)(AppConfig::SERVO_PULSE_MAX_US - AppConfig::SERVO_PULSE_MIN_US);
 
-    return (int)lroundf(AppConfig::P0025_MIN_US +
-                        (clipped - AppConfig::P0025_MIN_DEG) * spanUs / spanDeg);
+    return (int)lroundf(AppConfig::SERVO_PULSE_MIN_US +
+                        (clipped - AppConfig::SERVO_ANGLE_MIN_DEG) * spanUs / spanDeg);
 }
 
 } // namespace
@@ -68,8 +78,9 @@ void p02Manual(AppContext& ctx) {
     const float absTz = fabsf(tz);
 
     if (absFx > COMMAND_DEADBAND && absFx >= absFz && absFx >= absTz) {
-        motor1Power = P02_MOTOR_POWER;
-        motor2Power = P02_MOTOR_POWER;
+        const float scale = constrain(absFx / P02_FX_FULL_SCALE, 0.0f, 1.0f);
+        motor1Power = P02_MOTOR_POWER * scale;
+        motor2Power = P02_MOTOR_POWER * scale;
 
         if (fx > 0.0f) {
             // AVANCE validado: S1=120, S2=0
@@ -82,8 +93,9 @@ void p02Manual(AppContext& ctx) {
         }
     }
     else if (absTz > COMMAND_DEADBAND && absTz >= absFz) {
-        motor1Power = P02_MOTOR_POWER;
-        motor2Power = P02_MOTOR_POWER;
+        const float scale = constrain(absTz / P02_TZ_FULL_SCALE, 0.0f, 1.0f);
+        motor1Power = P02_MOTOR_POWER * scale;
+        motor2Power = P02_MOTOR_POWER * scale;
 
         if (tz > 0.0f) {
             // GIRO DERECHA validado: S1=120, S2=120
@@ -98,14 +110,15 @@ void p02Manual(AppContext& ctx) {
     else if (absFz > COMMAND_DEADBAND) {
         // Empuje sobre Z validado mecanicamente: S1=35, S2=85.
         // Los brushless son unidireccionales y no se ha validado una orientacion
-        // activa para -Z dentro del limite mecanico 0..120 grados.
+        // activa para -Z dentro del limite mecanico 0..180 grados.
         // Por seguridad: +Fz aplica empuje; -Fz corta motores (descenso/pasivo).
         servo1Deg = SERVO1_Z_DEG;
         servo2Deg = SERVO2_Z_DEG;
 
         if (fz > 0.0f) {
-            motor1Power = P02_MOTOR_POWER;
-            motor2Power = P02_MOTOR_POWER;
+            const float scale = constrain(absFz / P02_FZ_FULL_SCALE, 0.0f, 1.0f);
+            motor1Power = P02_MOTOR_POWER * scale;
+            motor2Power = P02_MOTOR_POWER * scale;
         }
     }
 

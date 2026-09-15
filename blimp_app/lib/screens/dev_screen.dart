@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/app_config.dart';
+import '../core/prefs.dart';
 import '../core/theme/app_theme.dart';
 import '../services/telemetry_service.dart';
 import '../widgets/aerostock_logo.dart';
 import '../widgets/telemetry_widgets.dart';
+import 'manual_control_screen.dart';
 
 class DevScreen extends StatefulWidget {
   final bool startInDemo;
@@ -16,7 +18,7 @@ class DevScreen extends StatefulWidget {
 
 class _DevScreenState extends State<DevScreen> {
   final TelemetryService service = TelemetryService();
-  final ipController = TextEditingController();
+  final ipController = persistentController('conn_host', '');
 
   @override
   void initState() {
@@ -38,8 +40,11 @@ class _DevScreenState extends State<DevScreen> {
         title: const Text('Conectar como Dev'),
         content: TextField(
           controller: ipController,
-          decoration: const InputDecoration(labelText: 'IP de la laptop'),
-          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'IP de la laptop o URL del tunel',
+            hintText: '192.168.1.5  o  https://algo.trycloudflare.com',
+          ),
+          keyboardType: TextInputType.url,
         ),
         actions: [
           TextButton(
@@ -388,17 +393,17 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
   @override
   bool get wantKeepAlive => true;
 
-  String test = 'p08'; // p08 = un globo, p09 = visita + escape
+  String test = Prefs.getString('mission_test', 'p08'); // p08 = un globo, p09 = visita + escape
 
-  final heightController = TextEditingController(text: '0.7');
-  final kpController = TextEditingController(text: '0.30');
-  final kiController = TextEditingController(text: '0.025');
-  final kdController = TextEditingController(text: '0.10');
-  final maxPowerController = TextEditingController(text: '15');
-  final slewController = TextEditingController(text: '0.18');
-  final visMinController = TextEditingController(text: '6');
-  final visMaxController = TextEditingController(text: '10');
-  final visDeadbandController = TextEditingController(text: '20');
+  final heightController = persistentController('mission_height', '0.7');
+  final kpController = persistentController('mission_kp', '0.30');
+  final kiController = persistentController('mission_ki', '0.025');
+  final kdController = persistentController('mission_kd', '0.10');
+  final maxPowerController = persistentController('mission_max_power', '15');
+  final slewController = persistentController('mission_slew', '0.18');
+  final visMinController = persistentController('mission_vis_min', '6');
+  final visMaxController = persistentController('mission_vis_max', '10');
+  final visDeadbandController = persistentController('mission_vis_deadband', '20');
 
   String status = 'Detenida';
   bool busy = false;
@@ -493,7 +498,12 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
                 DropdownMenuItem(value: 'p10', child: Text('P10 - Dos globos')),
                 DropdownMenuItem(value: 'p11', child: Text('P11 - Cuatro globos')),
               ],
-              onChanged: busy ? null : (v) => setState(() => test = v!),
+              onChanged: busy
+                  ? null
+                  : (v) => setState(() {
+                        test = v!;
+                        Prefs.setString('mission_test', test);
+                      }),
             ),
             const SizedBox(height: 8),
             Wrap(
@@ -585,15 +595,15 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
   @override
   bool get wantKeepAlive => true;
 
-  String test = 'p04'; // p04 = altura sola, p05 = yaw + altura
+  String test = Prefs.getString('control_test', 'p04'); // p04 = altura sola, p05 = yaw + altura
 
-  final fzController = TextEditingController(text: '0.7');
-  final kpController = TextEditingController(text: '0.30');
-  final kiController = TextEditingController(text: '0.025');
-  final kdController = TextEditingController(text: '0.10');
-  final maxPowerController = TextEditingController(text: '15');
-  final slewController = TextEditingController(text: '0.18');
-  final yawDegController = TextEditingController(text: '0');
+  final fzController = persistentController('control_fz', '0.7');
+  final kpController = persistentController('control_kp', '0.30');
+  final kiController = persistentController('control_ki', '0.025');
+  final kdController = persistentController('control_kd', '0.10');
+  final maxPowerController = persistentController('control_max_power', '15');
+  final slewController = persistentController('control_slew', '0.18');
+  final yawDegController = persistentController('control_yaw_deg', '0');
 
   String status = '';
   bool busy = false;
@@ -679,7 +689,12 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
                 DropdownMenuItem(value: 'p04', child: Text('P04 - Altura sola')),
                 DropdownMenuItem(value: 'p05', child: Text('P05 - Yaw + altura')),
               ],
-              onChanged: busy ? null : (v) => setState(() => test = v!),
+              onChanged: busy
+                  ? null
+                  : (v) => setState(() {
+                        test = v!;
+                        Prefs.setString('control_test', test);
+                      }),
             ),
             const SizedBox(height: 8),
             Wrap(
@@ -743,16 +758,12 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
 // ============================================================================
 // CONTROL MANUAL -- equivalente de run_test.py p02.
 //
-// La CLI manda una tecla por vez y esa queda activa hasta la siguiente. En
-// un telefono es mas seguro al reves: mantener presionado manda el
-// comando, soltar manda neutro (todo en 0) -- como un joystick, no como un
-// interruptor que hay que acordarse de apagar.
+// Arma P02 desde aca y abre ManualControlScreen (pantalla propia, bloqueada
+// en vertical) con el mando y la palanca de potencia -- ver
+// screens/manual_control_screen.dart. No conviene como una tarjeta mas
+// dentro de esta lista con scroll: el mando necesita pantalla completa y
+// que nada se reordene por un giro accidental del telefono a mitad de vuelo.
 // ============================================================================
-const double _kManualFx = 0.12;
-const double _kManualFz = 0.12;
-const double _kManualTz = 0.05;
-const int _kP02Mode = 11; // AppConfig::P02_MANUAL_CONTROL
-
 class _ManualControlPanel extends StatefulWidget {
   final TelemetryService service;
   const _ManualControlPanel({required this.service});
@@ -766,7 +777,6 @@ class _ManualControlPanelState extends State<_ManualControlPanel>
   @override
   bool get wantKeepAlive => true;
 
-  bool armed = false;
   bool arming = false;
   String status = '';
 
@@ -777,8 +787,8 @@ class _ManualControlPanelState extends State<_ManualControlPanel>
         icon: const Icon(Icons.warning_amber_rounded, color: AppTheme.danger, size: 32),
         title: const Text('¿Armar control manual?'),
         content: const Text(
-          'P02 mueve los brushless de verdad con los botones de abajo. '
-          'Asegurate de tener espacio despejado antes de continuar.',
+          'P02 mueve los brushless de verdad con el mando de la pantalla '
+          'siguiente. Asegurate de tener espacio despejado antes de continuar.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
@@ -800,50 +810,14 @@ class _ManualControlPanelState extends State<_ManualControlPanel>
         if (mounted) setState(() => status = s);
       },
     );
-    if (mounted) {
-      setState(() {
-        arming = false;
-        armed = true;
-      });
-    }
-  }
+    if (!mounted) return;
+    setState(() => arming = false);
 
-  void _send({double fx = 0, double fz = 0, double tz = 0}) {
-    widget.service.sendControl(mode: _kP02Mode, fx: fx, fz: fz, tz: tz);
-  }
-
-  void _neutral() => _send();
-
-  void _stop() {
-    widget.service.stop();
-    setState(() {
-      armed = false;
-      status = 'STOP enviado -- desarmado';
-    });
-  }
-
-  Widget _dirButton(IconData icon, String label, VoidCallback onPress) {
-    return GestureDetector(
-      onTapDown: (_) => onPress(),
-      onTapUp: (_) => _neutral(),
-      onTapCancel: _neutral,
-      child: Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: AppTheme.celeste100,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppTheme.outline),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: AppTheme.blue600),
-            Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceMuted)),
-          ],
-        ),
-      ),
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ManualControlScreen(service: widget.service)),
     );
+
+    if (mounted) setState(() => status = 'Detenido (STOP enviado)');
   }
 
   @override
@@ -862,68 +836,27 @@ class _ManualControlPanelState extends State<_ManualControlPanel>
                 const SizedBox(width: 8),
                 const Text('Control manual (P02)',
                     style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.onSurface)),
-                const Spacer(),
-                ArmedChip(armed: armed),
               ],
             ),
             const Divider(),
-            if (!armed)
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
-                onPressed: arming ? null : _confirmAndArm,
-                icon: arming
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.warning_amber_rounded),
-                label: Text(arming ? 'Armando...' : 'Armar P02'),
-              )
-            else ...[
-              const Text(
-                'Mantené presionado para mover; al soltar vuelve a neutro.',
-                style: TextStyle(fontSize: 11.5, color: AppTheme.onSurfaceMuted),
-              ),
-              const SizedBox(height: 10),
-              Center(
-                child: Column(
-                  children: [
-                    _dirButton(Icons.arrow_upward, 'Avanzar', () => _send(fx: _kManualFx)),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _dirButton(Icons.rotate_left, 'Izquierda', () => _send(tz: -_kManualTz)),
-                        const SizedBox(width: 72),
-                        _dirButton(Icons.rotate_right, 'Derecha', () => _send(tz: _kManualTz)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    _dirButton(Icons.arrow_downward, 'Retroceder', () => _send(fx: -_kManualFx)),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _dirButton(Icons.keyboard_double_arrow_up, 'Subir', () => _send(fz: _kManualFz)),
-                        const SizedBox(width: 24),
-                        _dirButton(Icons.keyboard_double_arrow_down, 'Bajar', () => _send(fz: -_kManualFz)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
-                  onPressed: _stop,
-                  icon: const Icon(Icons.stop),
-                  label: const Text('STOP'),
-                ),
-              ),
-            ],
+            const Text(
+              'Se abre en una pantalla aparte, bloqueada en vertical, con el '
+              'mando y la palanca de potencia.',
+              style: TextStyle(fontSize: 11.5, color: AppTheme.onSurfaceMuted),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: arming ? null : _confirmAndArm,
+              icon: arming
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.warning_amber_rounded),
+              label: Text(arming ? 'Armando...' : 'Armar y abrir mando'),
+            ),
             if (status.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(status,
@@ -956,23 +889,23 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
   @override
   bool get wantKeepAlive => true;
 
-  // P00 -- servos. S1 y S2 van en ESPEJO (nunca al mismo angulo para
-  // reproducir un vector real): vertical=35/95, avance=120/0,
-  // retroceso=0/120 -- ver SERVO*_Z_DEG/FORWARD_DEG/BACK_DEG en
-  // firmware/src/app/ControlCommon.h. Si esas constantes cambian, estos
+  // P00 -- servos. Con el Tower Pro (13/09, rango 0-180) el vertical de
+  // arranque es simetrico: 90/90, avance 180/0, retroceso 0/180 -- ver
+  // SERVO*_Z_DEG/FORWARD_DEG/BACK_DEG en firmware/src/app/ControlCommon.h.
+  // Sin re-validar en vuelo todavia. Si esas constantes cambian, estos
   // presets tambien hay que actualizarlos.
-  String servoSel = 'both';
-  double servo1Angle = 35;
-  double servo2Angle = 95;
+  String servoSel = Prefs.getString('bench_servo_sel', 'both');
+  double servo1Angle = double.tryParse(Prefs.getString('bench_servo1_angle', '90')) ?? 90;
+  double servo2Angle = double.tryParse(Prefs.getString('bench_servo2_angle', '90')) ?? 90;
 
   // P00M -- motores. servo1/servo2 son el vector que se usa TANTO para
   // posicionar antes de armar COMO en cada paquete de potencia (el firmware
   // no los recuerda entre mensajes de este modo).
-  double servo1 = 35;
-  double servo2 = 95;
-  final servo1Controller = TextEditingController(text: '35');
-  final servo2Controller = TextEditingController(text: '95');
-  String motorSel = 'both';
+  late double servo1 = double.tryParse(servo1Controller.text) ?? 90;
+  late double servo2 = double.tryParse(servo2Controller.text) ?? 90;
+  final servo1Controller = persistentController('bench_motor_servo1', '90');
+  final servo2Controller = persistentController('bench_motor_servo2', '90');
+  String motorSel = Prefs.getString('bench_motor_sel', 'both');
   double motorPower = 0;
   bool motorsReady = false;
   bool arming = false;
@@ -1057,6 +990,8 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
   }
 
   void _sendServoAngles() {
+    Prefs.setString('bench_servo1_angle', servo1Angle.toString());
+    Prefs.setString('bench_servo2_angle', servo2Angle.toString());
     widget.service.setServo(servo: servoSel, angle1: servo1Angle, angle2: servo2Angle);
   }
 
@@ -1073,8 +1008,8 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
           child: Slider(
             value: value,
             min: 0,
-            max: 120,
-            divisions: 120,
+            max: 180,
+            divisions: 180,
             label: '${value.round()}°',
             onChanged: onChanged,
             onChangeEnd: onChangeEnd,
@@ -1107,7 +1042,10 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
             child: Text('Servos (P00)', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
           const SizedBox(height: 8),
-          _servoSelector(servoSel, (v) => setState(() => servoSel = v)),
+          _servoSelector(servoSel, (v) => setState(() {
+                servoSel = v;
+                Prefs.setString('bench_servo_sel', v);
+              })),
           const SizedBox(height: 4),
           Text(
             servoSel == 'both'
@@ -1121,16 +1059,16 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
             runSpacing: 8,
             children: [
               OutlinedButton(
-                onPressed: () => _applyServoPreset(35, 95),
-                child: const Text('Vertical (35/95)'),
+                onPressed: () => _applyServoPreset(90, 90),
+                child: const Text('Vertical (90/90)'),
               ),
               OutlinedButton(
-                onPressed: () => _applyServoPreset(120, 0),
-                child: const Text('Avance (120/0)'),
+                onPressed: () => _applyServoPreset(180, 0),
+                child: const Text('Avance (180/0)'),
               ),
               OutlinedButton(
-                onPressed: () => _applyServoPreset(0, 120),
-                child: const Text('Retroceso (0/120)'),
+                onPressed: () => _applyServoPreset(0, 180),
+                child: const Text('Retroceso (0/180)'),
               ),
             ],
           ),
@@ -1148,10 +1086,11 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
             onChangeEnd: (_) => _sendServoAngles(),
           ),
           const Text(
-            'Los presets ya vienen calibrados en espejo (S1≠S2): son los '
-            'mismos vectores que usa la misión real. Si movés los sliders a '
-            'mano para un servo suelto, recordá que "35°/35°" NO es el '
-            'vector vertical.',
+            'Los presets usan los mismos vectores que la misión real. Con el '
+            'servo actual el vertical de arranque es simétrico (90°/90°), '
+            'pero todavía sin validar en vuelo -- si al recalibrar resulta '
+            'que hace falta un vector asimétrico (como pasaba con el '
+            'servo viejo), hay que actualizar estos presets.',
             style: TextStyle(fontSize: 11.5, color: AppTheme.onSurfaceMuted),
           ),
 
@@ -1209,7 +1148,10 @@ class _BenchTestPanelState extends State<_BenchTestPanel> with AutomaticKeepAliv
               label: Text(arming ? 'Armando...' : 'Posicionar + Armar'),
             )
           else ...[
-            _servoSelector(motorSel, (v) => setState(() => motorSel = v)),
+            _servoSelector(motorSel, (v) => setState(() {
+                  motorSel = v;
+                  Prefs.setString('bench_motor_sel', v);
+                })),
             const SizedBox(height: 8),
             Row(
               children: [

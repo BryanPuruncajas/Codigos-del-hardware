@@ -49,8 +49,19 @@ class TelemetryService extends ChangeNotifier {
     lastError = null;
     _resetHistory();
 
+    // Si "host" ya trae esquema (p.ej. una URL de un tunel Cloudflare como
+    // https://algo.trycloudflare.com), se usa tal cual -- ahi el tunel sirve
+    // wss:// hacia afuera aunque el bridge local siga hablando ws:// plano.
+    // Si es solo una IP (el caso de siempre, misma WiFi), se arma como antes.
+    final trimmed = host.trim();
+    final hasScheme = trimmed.contains('://');
+    final uri = hasScheme
+        ? Uri.parse(trimmed).replace(
+            scheme: trimmed.startsWith('https://') ? 'wss' : 'ws')
+        : Uri.parse('ws://$trimmed:$port');
+
     try {
-      _channel = WebSocketChannel.connect(Uri.parse('ws://$host:$port'));
+      _channel = WebSocketChannel.connect(uri);
     } catch (e) {
       lastError = 'No se pudo conectar: $e';
       notifyListeners();
@@ -220,9 +231,10 @@ class TelemetryService extends ChangeNotifier {
   // -------------------------------------------------------------------
 
   /// P00: si servo es '1' o '2', mueve SOLO ese servo (el otro queda
-  /// detach); si es 'both', mueve los DOS a la vez con SUS PROPIOS angulos
-  /// -- angle1/angle2 casi nunca deben ser iguales, porque los servos van
-  /// en espejo: el vector vertical real es 35/95, no 35/35.
+  /// detach); si es 'both', mueve los DOS a la vez con SUS PROPIOS angulos.
+  /// Con el SG90 (04/09, rango 0..180) el vertical de arranque es 90/90
+  /// (centro simetrico, sin re-validar en vuelo todavia); ver SERVO*_Z_DEG
+  /// en firmware/src/app/ControlCommon.h.
   void setServo({required String servo, required double angle1, required double angle2}) {
     _send({'cmd': 'servo_set', 'servo': servo, 'angle1': angle1, 'angle2': angle2});
   }
@@ -370,7 +382,7 @@ class TelemetryService extends ChangeNotifier {
         'nicla_distance': 9999.0,
       }});
       _applyTelemetry({'t': simT, 'flag': 3, 'fields': {
-        'servo1': 35.0, 'servo2': 95.0, 'motor1': 8.0, 'motor2': 8.0,
+        'servo1': 90.0, 'servo2': 90.0, 'motor1': 8.0, 'motor2': 8.0,
         'armed': 1.0, 'mode': 17.0,
       }});
       _applyTelemetry({'t': simT, 'flag': 4, 'fields': {
