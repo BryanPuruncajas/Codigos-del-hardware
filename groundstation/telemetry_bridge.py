@@ -141,6 +141,7 @@ campo "armed" del flag 3 cambiando a 1):
 import argparse
 import asyncio
 import json
+import math
 import struct
 import time
 from pathlib import Path
@@ -150,8 +151,10 @@ import websockets
 from common.link import BlimpLink, mac_to_bytes
 from common.telemetry import LABELS, parse
 from common.control_pack import NAME_TO_MODE, build_control_payload, make_args
+from common.control_pack import ACTUATED
 from common.csv_logger import CsvLogger
 from user_parameters import ROBOT_MACS
+from pilot_lease import PilotLease
 
 clients: dict[websockets.WebSocketServerProtocol, str] = {}  # ws -> role
 serial_write_lock = asyncio.Lock()
@@ -162,6 +165,88 @@ serial_write_lock = asyncio.Lock()
 # una mision (P08, etc.) esta corriendo, eso fuerza una transicion a
 # SAFE_STOP y mata la mision, aunque la intencion era solo armar/desarmar.
 last_known_mode = 0
+last_actuator_status = None  # (monotonic timestamp, armed); required for P12
+
+
+async def start_vision_bench(link, mac):
+    """Dedicated non-actuated path. Never uses mission_start/ARM sequence."""
+    if (last_actuator_status is None or
+            time.monotonic() - last_actuator_status[0] > 2 or
+            last_actuator_status[1] != 0):
+        raise ValueError('P12 requiere telemetria reciente confirmando DESARMADO')
+    fx, fz, tx, tz, aux, _ = build_control_payload(make_args('p11t2'))
+    for index in range(3):
+        await write_control(link, mac, mode=22, fx=fx, fz=fz, tx=tx, tz=tz,
+                            aux=aux, arm=-1, reset=1 if index == 0 else 0)
+        await asyncio.sleep(0.05)
+
+
+async def stop_vision_bench(link, mac):
+    for _ in range(3):
+        await write_control(link, mac, mode=0, arm=-1)
+        await asyncio.sleep(0.05)
+
+
+def registration_due(now, status, last_request):
+    return (status is None or now-status[0]>2) and now-last_request>=5
+
+
+async def refresh_registration(link, mac):
+    # Ground protocol A/G only: peer + return-telemetry destination. No C
+    # control packet, ARM, mode, reset, servo or motor values. Do not call
+    # _line(): read_loop is the sole serial reader after startup.
+    address=bytes.fromhex(mac.replace(':',''))
+    if len(address)!=6:raise ValueError('MAC invalida')
+    async with serial_write_lock:
+        link.ser.write(b'A'+address+b'G'+address)
+
+
+async def registration_keepalive(link):
+    last_request=float('-inf')
+    while True:
+        await asyncio.sleep(1)
+        now=time.monotonic()
+        if not ROBOT_MACS or not registration_due(now,last_actuator_status,last_request):continue
+        last_request=now
+        try:
+            await refresh_registration(link,ROBOT_MACS[0])
+            print('[bridge] sin F3 reciente; renovando registro de telemetria (sin armado).',flush=True)
+        except OSError as error:
+            print(f'[bridge] registro no enviado; revisar enlace USB: {error}',flush=True)
+
+
+def trial_duration(msg):
+    value = float(msg.get('duration_s', 20))
+    if not math.isfinite(value) or not 5 <= value <= 240:
+        raise ValueError('Duracion debe estar entre 5 y 240 segundos')
+    return value
+
+
+class TrialDeadline:
+    """Host-side limit only. Does not replace an on-board link-loss failsafe."""
+    def __init__(self, link, mac, seconds, mode=None):
+        self.link, self.mac, self.seconds = link, mac, seconds
+        self.mode = mode
+        self.task = None
+    async def run(self):
+        await asyncio.sleep(self.seconds)
+        await stop_vision_bench(self.link, self.mac)
+    def start(self):
+        self.task = asyncio.create_task(self.run())
+    async def close(self):
+        if self.task:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+        await stop_vision_bench(self.link, self.mac)
+
+
+def continues_manual_trial(trial, cmd, msg, mac):
+    """P02 direction/neutral commands keep their original session deadline."""
+    return (trial is not None and trial.mode == NAME_TO_MODE['p02'] and
+            trial.task is not None and not trial.task.done() and
+            cmd == 'control' and msg.get('mode') == NAME_TO_MODE['p02'] and
+            mac.lower() == trial.mac.lower() and
+            all(msg.get(key, 0) == 0 for key in ('arm', 'reload', 'reset')))
 
 
 # ============================================================================
@@ -210,9 +295,17 @@ async def broadcast(msg: str) -> None:
 
 
 def make_handler(link: BlimpLink, dev_token: str):
+    pilot=PilotLease(lambda mac:stop_vision_bench(link,mac))
 
     async def handler(ws: websockets.WebSocketServerProtocol) -> None:
         role = None
+        bench_task = None
+        bench_mac = None
+        trial = None
+        pilot_client=False
+        async def bench_timeout(mac):
+            await asyncio.sleep(240)
+            await stop_vision_bench(link, mac)
         try:
             # Primer mensaje OBLIGATORIO: auth.
             first = await ws.recv()
@@ -261,8 +354,51 @@ def make_handler(link: BlimpLink, dev_token: str):
 
                 try:
                     effective = None
+                    if cmd=='pilot_claim':
+                        if trial is not None:raise ValueError('Cierra el ensayo anterior antes de tomar el mando')
+                        await pilot.claim(ws,mac,last_actuator_status)
+                        pilot_client=True
+                        await ws.send(json.dumps({'cmd_ok':True,'cmd':cmd,'pilot_version':1}))
+                        continue
+                    if cmd=='pilot_ping':
+                        pilot.ping(ws,mac)
+                        await ws.send(json.dumps({'cmd_ok':True,'cmd':cmd}))
+                        continue
+                    if cmd=='pilot_release':
+                        await pilot.release(ws)
+                        await ws.send(json.dumps({'cmd_ok':True,'cmd':cmd}))
+                        continue
+                    if cmd in ('stop','disarm'):
+                        if pilot.owner is not None:await pilot.release(pilot.owner)
+                    else:
+                        if pilot_client and pilot.owner is not ws:
+                            raise ValueError('Sesion de mando vencida; reinicia el controlador')
+                        pilot.check(ws,mac)
 
-                    if cmd == 'arm':
+                    # P02 button presses/releases are updates within the same
+                    # manual session. Never send STOP ahead of their control
+                    # packet, and never extend the original deadline.
+                    keep_manual = continues_manual_trial(trial, cmd, msg, mac)
+                    if trial is not None and cmd != 'mission_update' and not keep_manual:
+                        await trial.close()
+                        trial = None
+
+                    # A later command must not inherit a delayed STOP from P12.
+                    if bench_task is not None:
+                        bench_task.cancel()
+                        await asyncio.gather(bench_task, return_exceptions=True)
+                        bench_task = None
+                        await stop_vision_bench(link, bench_mac)
+                        bench_mac = None
+
+                    if cmd == 'vision_bench_start':
+                        await start_vision_bench(link, mac)
+                        bench_mac = mac
+                        bench_task = asyncio.create_task(bench_timeout(mac))
+                        effective = ['P12 desarmado solicitado; limite 240 s; verificar modo=22 y armed=0']
+                    elif cmd == 'arm':
+                        if last_known_mode in {NAME_TO_MODE[name] for name in ACTUATED}:
+                            raise ValueError('Usa Iniciar prueba/mision para armado con duracion limitada')
                         await write_control(link, mac, mode=last_known_mode, arm=1)
                     elif cmd == 'disarm':
                         await write_control(link, mac, mode=last_known_mode, arm=-1)
@@ -295,8 +431,10 @@ def make_handler(link: BlimpLink, dev_token: str):
                             continue
 
                         overrides = {k: v for k, v in msg.items()
-                                     if k not in ('cmd', 'test', 'mac')}
+                                     if k not in ('cmd', 'test', 'mac', 'duration_s')}
                         try:
+                            duration_msg = {'duration_s': 120, **msg} if test == 'p02' else msg
+                            duration = trial_duration(duration_msg) if test in ACTUATED else None
                             control_args = make_args(test, **overrides)
                             fx, fz, tx, tz, aux, effective = build_control_payload(control_args)
                         except (TypeError, ValueError) as e:
@@ -307,7 +445,18 @@ def make_handler(link: BlimpLink, dev_token: str):
                             continue
 
                         mode = NAME_TO_MODE[test]
+                        if cmd == 'mission_update' and test in ACTUATED and (
+                                trial is None or trial.task.done()):
+                            raise ValueError('No hay ensayo temporizado activo en esta sesion; inicia uno nuevo')
                         if cmd == 'mission_start':
+                            if test in ACTUATED:
+                                if (last_actuator_status is None or
+                                        time.monotonic() - last_actuator_status[0] > 2 or
+                                        last_actuator_status[1] != 0):
+                                    raise ValueError('Inicio actuado requiere F3 reciente DESARMADO; pulsa STOP primero')
+                                trial = TrialDeadline(link, mac, duration, mode=mode)
+                                trial.start()
+                                effective.append(f'STOP automatico a los {duration:g} s desde el inicio, incluido armado')
                             # Misma secuencia que run_test.py: ARM con el
                             # paquete completo, esperar al ESC, y recien
                             # despues RESET para arrancar limpio.
@@ -315,6 +464,8 @@ def make_handler(link: BlimpLink, dev_token: str):
                                                  fx=fx, fz=fz, tx=tx, tz=tz,
                                                  aux=aux, arm=1)
                             await asyncio.sleep(4.2)
+                            if trial is not None and trial.task.done():
+                                raise ValueError('Plazo agotado durante armado; STOP enviado')
                         await write_control(link, mac, mode=mode,
                                              fx=fx, fz=fz, tx=tx, tz=tz,
                                              aux=aux, reset=1)
@@ -434,6 +585,13 @@ def make_handler(link: BlimpLink, dev_token: str):
             pass
 
         finally:
+            await pilot.release(ws)
+            if trial is not None:
+                await trial.close()
+            if bench_task is not None:
+                bench_task.cancel()
+                await asyncio.gather(bench_task, return_exceptions=True)
+                await stop_vision_bench(link, bench_mac)
             clients.pop(ws, None)
             print(f"[bridge] cliente desconectado ({len(clients)} activos)")
 
@@ -445,7 +603,7 @@ def make_handler(link: BlimpLink, dev_token: str):
 # ============================================================================
 
 async def read_loop(link: BlimpLink, logger: CsvLogger) -> None:
-    global last_known_mode
+    global last_known_mode, last_actuator_status
     loop = asyncio.get_event_loop()
     gen = link.lines()
 
@@ -471,6 +629,7 @@ async def read_loop(link: BlimpLink, logger: CsvLogger) -> None:
 
         if tel.flag == 3 and 'mode' in fields:
             last_known_mode = int(fields['mode'])
+            last_actuator_status = (time.monotonic(), fields.get('armed'))
 
         payload = {
             't': time.time(),
@@ -482,6 +641,7 @@ async def read_loop(link: BlimpLink, logger: CsvLogger) -> None:
 
 async def main(port_name: str, ws_port: int, dev_token: str) -> None:
     link = BlimpLink(port_name)
+    link.ser.write_timeout=1
     print(f"[bridge] serial abierto en {port_name}")
 
     # Mismo CsvLogger que usa run_test.py: cada linea de telemetria que pasa
@@ -516,9 +676,12 @@ async def main(port_name: str, ws_port: int, dev_token: str) -> None:
     handler = make_handler(link, dev_token)
 
     async with websockets.serve(handler, '0.0.0.0', ws_port):
+        keepalive=asyncio.create_task(registration_keepalive(link))
         try:
             await read_loop(link, logger)
         finally:
+            keepalive.cancel()
+            await asyncio.gather(keepalive,return_exceptions=True)
             link.close()
             logger.close()
             print(f"[bridge] CSV cerrado: {logger.path}")

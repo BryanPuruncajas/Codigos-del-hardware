@@ -1,0 +1,20 @@
+{
+  "physical_reference_cm": 22,
+  "reference_approximate": true,
+  "raw_range": 65535,
+  "observed_uart_gaps_ms": [
+    18419,
+    2024,
+    1519
+  ],
+  "sender_alive_during_uart_gaps": true,
+  "local_send_errors": 0,
+  "bad_line_count_increased_from": 4,
+  "bad_line_count_increased_to": 9,
+  "cause_confirmed": false,
+  "logs": [
+    "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\logs\\flow_sender\\20261030_190230_865592.jsonl",
+    "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\logs\\flow_sender\\20261030_190303_900543.jsonl"
+  ],
+  "note": "No se distingue aun entre productor UART, alimentacion y contacto electrico; no se modifico Crazyflie ni se activaron motores."
+}

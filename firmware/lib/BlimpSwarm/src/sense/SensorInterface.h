@@ -48,7 +48,7 @@ public:
      * @brief Gets ground station parameters for the sensor
      * 
      */
-    virtual void getPreferences();
+    virtual void getPreferences() {} // optional hook; defined for every derived suite
 };
 
 

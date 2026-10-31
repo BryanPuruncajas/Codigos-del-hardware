@@ -12,16 +12,20 @@
 #define Barometer_h
 
 #include "SensorInterface.h"
-#include <Adafruit_BMP3XX.h>
+#include "Bmp390Sampler.h"
+#include "VerticalEstimate.h"
 
 class Barometer : public SensorInterface {
 private:
     float altitude; // Stores the calculated altitude
     float pressure; // Stores the latest pressure reading
     float temperature; // Stores the latest temperature reading
-    Adafruit_BMP3XX bme;
+    Bmp390Sampler sampler;
     bool baroInitialized = false;
-    unsigned long startTime;
+    unsigned long startTime = 0;
+    uint32_t lastGoodUs = 0;
+    uint32_t samplePeriodUs = 0;
+    VerticalEstimate estimate;
     float velocityZ;
     float groundLevel = 0.0;
     // Other private members as necessary...
@@ -60,6 +64,7 @@ public:
      * 
      */
     void getPreferences();
+    VerticalDiagnostics diagnostics() const;
     // Additional Barometer-specific methods...
 };
 

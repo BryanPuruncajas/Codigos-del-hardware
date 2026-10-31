@@ -45,6 +45,14 @@ public:
      * @param setMode The desired mode to change the Nicla Vision to.
      */
     void changeNiclaMode(uint8_t setMode);
+    const NiclaFeedback& niclaFeedback() const { return nicla.feedback(); }
+    void resetNiclaTarget() { nicla.resetTarget(); }
+    VerticalDiagnostics verticalDiagnostics() const { return sensorSuite.verticalDiagnostics(); }
+    void publishFlowVertical(const VerticalDiagnostics& d){
+        sensorSuite.publishFlowVertical(d);
+        sensorValues[0]=0;sensorValues[1]=d.healthy?d.filteredHeight:0.f;
+        sensorValues[2]=d.healthy?d.filteredVelocity:0.f;
+    }
 
 private:
     Nicla nicla;

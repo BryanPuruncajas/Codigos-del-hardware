@@ -2,6 +2,10 @@
 
 Un único firmware contiene P01–P11. `main.cpp` arranca siempre desarmado y despacha el modo recibido por ESP-NOW.
 
+Para probar un segundo XIAO ESP32-S3 como nodo Flow por ESP-NOW, consulta
+[`flow_node/README.md`](flow_node/README.md). Esta primera etapa envía datos de
+ejemplo y los muestra por Serial; todavía no conecta ni controla los sensores.
+
 Puntos fijos de hardware: D2=RST BNO (HIGH), D0/D1=servos, D9/D10=brushless. El límite duro de motores es 50%.
 ## Hardware de sensores activo (tesis)
 

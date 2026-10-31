@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../core/app_config.dart';
 import '../core/theme/app_theme.dart';
 import '../services/telemetry_service.dart';
-import '../widgets/aerostock_logo.dart';
 import '../widgets/telemetry_widgets.dart';
+import '../widgets/manual_control_panel.dart';
 
 class DevScreen extends StatefulWidget {
   final bool startInDemo;
@@ -61,18 +61,22 @@ class _DevScreenState extends State<DevScreen> {
     );
   }
 
+  void _showAppMenu(String action) {
+    if (action == 'demo') {
+      service.demoMode ? service.stopDemo() : service.startDemo();
+    } else if (action == 'connect') {
+      _showConnectDialog();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: const DecoratedBox(decoration: BoxDecoration(gradient: AppTheme.appBarGradient)),
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            AeroStockMark(size: 26, envelopeColor: Colors.white70),
-            SizedBox(width: 10),
-            Text('Control (Dev)'),
-          ],
+        title: const Text(
+          'Competencia',
+          overflow: TextOverflow.ellipsis,
         ),
         actions: [
           ListenableBuilder(
@@ -82,15 +86,26 @@ class _DevScreenState extends State<DevScreen> {
               child: ConnectionChip(service: service),
             ),
           ),
-          IconButton(
-            icon: Icon(service.demoMode ? Icons.science : Icons.science_outlined),
-            tooltip: 'Modo demostración (sin hardware)',
-            onPressed: () => service.demoMode ? service.stopDemo() : service.startDemo(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_ethernet),
-            onPressed: _showConnectDialog,
-            tooltip: 'Configurar conexión',
+          PopupMenuButton<String>(
+            tooltip: 'Opciones de conexión',
+            icon: const Icon(Icons.more_vert),
+            onSelected: _showAppMenu,
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'demo',
+                child: ListTile(
+                  leading: Icon(service.demoMode ? Icons.stop_circle_outlined : Icons.science_outlined),
+                  title: Text(service.demoMode ? 'Detener demo' : 'Modo demostración'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'connect',
+                child: ListTile(
+                  leading: Icon(Icons.settings_ethernet),
+                  title: Text('Configurar conexión'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -163,13 +178,15 @@ class _DevScreenState extends State<DevScreen> {
                 ],
               ),
               const SizedBox(height: 12),
+              FlowTelemetryPanel(latest: service.latest, history: service.flowHistory),
+              const SizedBox(height: 12),
               _SensorDiagnosticPanel(service: service),
               const SizedBox(height: 12),
               _MissionPanel(service: service),
               const SizedBox(height: 12),
               _ControlPanel(service: service),
               const SizedBox(height: 12),
-              _ManualControlPanel(service: service),
+              ManualControlPanel(service: service),
               const SizedBox(height: 12),
               ControlChart(
                 title: 'Altura en vivo',
@@ -242,7 +259,7 @@ class _DemoBanner extends StatelessWidget {
 //   python run_test.py p01 --seconds N
 // P01 no toca motores ni servos (ver P01SensorIntegration.cpp): solo sirve
 // para mirar la telemetria de sensores en el tiempo, p.ej. para ver si la
-// altura del barometro deriva sola con el blimp quieto.
+// estabilidad de la altura y velocidad Flowdeck con el blimp quieto.
 // ============================================================================
 class _SensorDiagnosticPanel extends StatefulWidget {
   final TelemetryService service;
@@ -324,35 +341,57 @@ class _SensorDiagnosticPanelState extends State<_SensorDiagnosticPanel>
             const Divider(),
             const Text(
               'Sin motores ni servos. Dejá el blimp completamente quieto y '
-              'mirá el gráfico "Altura en vivo" más abajo para ver si deriva '
-              'sola con el tiempo.',
+              'compará la altura Flowdeck con una medida fisica y comproba '
+              'que Vz permanezca cerca de cero.',
               style: TextStyle(color: AppTheme.onSurfaceMuted, fontSize: 12.5),
             ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                SizedBox(
-                  width: 100,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isNarrow = constraints.maxWidth < 460;
+                final durationInput = SizedBox(
+                  width: isNarrow ? double.infinity : 100,
                   child: TextField(
                     controller: durationController,
                     enabled: !running,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(labelText: 'Duración (s)', isDense: true),
                   ),
-                ),
-                const SizedBox(width: 12),
-                FilledButton.icon(
+                );
+                final startButton = FilledButton.icon(
                   onPressed: running ? null : _start,
                   icon: const Icon(Icons.play_arrow),
                   label: const Text('Iniciar P01'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
+                );
+                final stopButton = OutlinedButton.icon(
                   onPressed: running ? () => _stop() : null,
                   icon: const Icon(Icons.stop),
                   label: const Text('Detener'),
-                ),
-              ],
+                );
+
+                if (isNarrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      durationInput,
+                      const SizedBox(height: 8),
+                      startButton,
+                      const SizedBox(height: 8),
+                      stopButton,
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    durationInput,
+                    const SizedBox(width: 12),
+                    startButton,
+                    const SizedBox(width: 8),
+                    stopButton,
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 8),
             Text(
@@ -389,12 +428,13 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
   bool get wantKeepAlive => true;
 
   String test = 'p08'; // p08 = un globo, p09 = visita + escape
+  final durationController = TextEditingController(text: '240');
 
   final heightController = TextEditingController(text: '0.7');
   final kpController = TextEditingController(text: '0.30');
   final kiController = TextEditingController(text: '0.025');
   final kdController = TextEditingController(text: '0.10');
-  final maxPowerController = TextEditingController(text: '15');
+  final maxPowerController = TextEditingController(text: '10');
   final slewController = TextEditingController(text: '0.18');
   final visMinController = TextEditingController(text: '6');
   final visMaxController = TextEditingController(text: '10');
@@ -406,6 +446,7 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
   @override
   void dispose() {
     heightController.dispose();
+    durationController.dispose();
     kpController.dispose();
     kiController.dispose();
     kdController.dispose();
@@ -424,10 +465,11 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
   /// arma fx/fz/tx/tz/aux con common/control_pack.py, igual que la CLI.
   Map<String, dynamic> _params() => {
         'height': _num(heightController, 0.7),
+        'duration_s': _num(durationController, 240),
         'kp': _num(kpController, 0.30),
         'ki': _num(kiController, 0.025),
         'kd': _num(kdController, 0.10),
-        'max_power': _num(maxPowerController, 15),
+        'max_power': _num(maxPowerController, 10),
         'slew': _num(slewController, 0.18),
         'vis_min_power': _num(visMinController, 6),
         'vis_max_power': _num(visMaxController, 10),
@@ -477,7 +519,7 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
                 Icon(Icons.rocket_launch, size: 20, color: AppTheme.blue600),
                 const SizedBox(width: 8),
                 const Text(
-                  'Misión (P08–P11)',
+                  'Misión y prueba P12',
                   style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.onSurface),
                 ),
                 const Spacer(),
@@ -485,15 +527,59 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
               ],
             ),
             const Divider(),
+            const Text('P12 · prueba manual de visión, sin motores ni control de altura. '
+                'Alinea primero con 1 → 2. Finaliza automáticamente a los 240 s (4 minutos).'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: !busy && widget.service.connected &&
+                          widget.service.role == 'dev' && armedVal == 0 &&
+                          !widget.service.demoMode
+                      ? () {
+                          widget.service.startVisionBench();
+                          setState(() => status =
+                              'P12 solicitado: comprueba modo 22 y DESARMADO. '
+                              'Observa las decisiones en la tarjeta azul superior.');
+                        }
+                      : null,
+                  icon: const Icon(Icons.visibility),
+                  label: const Text('Iniciar P12 desarmado'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: widget.service.connected && widget.service.role == 'dev'
+                      ? _stop : null,
+                  icon: const Icon(Icons.stop),
+                  label: const Text('Detener P12 / STOP'),
+                ),
+              ],
+            ),
+            const Text('No pulsar ARM para P12. El bridge exige telemetría reciente '
+                'de desarmado. Si el botón está gris, revisa conexión y acceso Dev.'),
+            const Divider(),
             DropdownButton<String>(
               value: test,
               items: const [
                 DropdownMenuItem(value: 'p08', child: Text('P08 - Un globo')),
-                DropdownMenuItem(value: 'p09', child: Text('P09 - Visita + escape')),
+                DropdownMenuItem(value: 'p09', child: Text('P09 - Visita sin retroceso')),
                 DropdownMenuItem(value: 'p10', child: Text('P10 - Dos globos')),
-                DropdownMenuItem(value: 'p11', child: Text('P11 - Cuatro globos')),
+                DropdownMenuItem(value: 'p11', child: Text('P11 - Track 1: rectángulo')),
+                DropdownMenuItem(value: 'p11t2', child: Text('P11 - Track 2: infinito')),
               ],
               onChanged: busy ? null : (v) => setState(() => test = v!),
+            ),
+            const Text('Antes de iniciar: alinear el rumbo con 1 → 2. '
+                'La vuelta incluye regresar al globo 1. '
+                'Llegada N03 pendiente de calibración antes del recorrido autónomo.'),
+            OutlinedButton.icon(
+              onPressed: busy || widget.service.currentReferences == null ? null : () {
+                final refs = widget.service.currentReferences!;
+                heightController.text = refs['height']!.toStringAsFixed(3);
+                setState(() => status = 'Altura actual copiada. Mantén el rumbo 1 → 2 antes de iniciar.');
+              },
+              icon: const Icon(Icons.my_location),
+              label: const Text('Copiar altura actual (desarmado)'),
             ),
             const SizedBox(height: 8),
             Wrap(
@@ -501,6 +587,7 @@ class _MissionPanelState extends State<_MissionPanel> with AutomaticKeepAliveCli
               runSpacing: 12,
               children: [
                 _f('Altura (m)', heightController),
+                _f('Duración (s)', durationController),
                 _f('Kp', kpController),
                 _f('Ki', kiController),
                 _f('Kd', kdController),
@@ -586,12 +673,13 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
   bool get wantKeepAlive => true;
 
   String test = 'p04'; // p04 = altura sola, p05 = yaw + altura
+  final durationController = TextEditingController(text: '20');
 
   final fzController = TextEditingController(text: '0.7');
   final kpController = TextEditingController(text: '0.30');
   final kiController = TextEditingController(text: '0.025');
   final kdController = TextEditingController(text: '0.10');
-  final maxPowerController = TextEditingController(text: '15');
+  final maxPowerController = TextEditingController(text: '10');
   final slewController = TextEditingController(text: '0.18');
   final yawDegController = TextEditingController(text: '0');
 
@@ -601,6 +689,7 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
   @override
   void dispose() {
     fzController.dispose();
+    durationController.dispose();
     kpController.dispose();
     kiController.dispose();
     kdController.dispose();
@@ -616,12 +705,18 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
   /// Mismos nombres que los --flags de run_test.py (sin guiones).
   Map<String, dynamic> _params() => {
         'height': _num(fzController, 0.7),
+        'duration_s': _num(durationController, 20),
         'kp': _num(kpController, 0.30),
         'ki': _num(kiController, 0.025),
         'kd': _num(kdController, 0.10),
-        'max_power': _num(maxPowerController, 15),
+        'max_power': _num(maxPowerController, 10),
         'slew': _num(slewController, 0.18),
         if (test == 'p05') 'yaw_deg': _num(yawDegController, 0),
+        // Match the existing mission yaw tuning, not a new flight tuning.
+        if (test == 'p05') 'yaw_kd': 9.0,
+        if (test == 'p05') 'yaw_deadband_deg': 5.0,
+        if (test == 'p05') 'yaw_min_power': 6.0,
+        if (test == 'p05') 'yaw_max_power': 10.0,
       };
 
   Future<void> _start() async {
@@ -681,12 +776,25 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
               ],
               onChanged: busy ? null : (v) => setState(() => test = v!),
             ),
+            OutlinedButton.icon(
+              onPressed: busy || widget.service.currentReferences == null ? null : () {
+                final refs = widget.service.currentReferences!;
+                fzController.text = refs['height']!.toStringAsFixed(3);
+                yawDegController.text = refs['yaw_deg']!.toStringAsFixed(1);
+                setState(() => status = 'Altura y yaw actuales copiados; todavía desarmado.');
+              },
+              icon: const Icon(Icons.my_location),
+              label: const Text('Copiar altura y yaw actuales'),
+            ),
+            const Text('Duración 5–240 s, incluido armado. STOP automático en Ground; '
+                'no sustituye STOP manual ni protege si Ground se cierra abruptamente.'),
             const SizedBox(height: 8),
             Wrap(
               spacing: 12,
               runSpacing: 12,
               children: [
                 _paramField('Altura (m)', fzController, width: 100),
+                _paramField('Duración (s)', durationController, width: 110),
                 _paramField('Kp', kpController, width: 90),
                 _paramField('Ki', kiController, width: 90),
                 _paramField('Kd', kdController, width: 90),
@@ -748,194 +856,6 @@ class _ControlPanelState extends State<_ControlPanel> with AutomaticKeepAliveCli
 // comando, soltar manda neutro (todo en 0) -- como un joystick, no como un
 // interruptor que hay que acordarse de apagar.
 // ============================================================================
-const double _kManualFx = 0.12;
-const double _kManualFz = 0.12;
-const double _kManualTz = 0.05;
-const int _kP02Mode = 11; // AppConfig::P02_MANUAL_CONTROL
-
-class _ManualControlPanel extends StatefulWidget {
-  final TelemetryService service;
-  const _ManualControlPanel({required this.service});
-
-  @override
-  State<_ManualControlPanel> createState() => _ManualControlPanelState();
-}
-
-class _ManualControlPanelState extends State<_ManualControlPanel>
-    with AutomaticKeepAliveClientMixin {
-  @override
-  bool get wantKeepAlive => true;
-
-  bool armed = false;
-  bool arming = false;
-  String status = '';
-
-  Future<void> _confirmAndArm() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        icon: const Icon(Icons.warning_amber_rounded, color: AppTheme.danger, size: 32),
-        title: const Text('¿Armar control manual?'),
-        content: const Text(
-          'P02 mueve los brushless de verdad con los botones de abajo. '
-          'Asegurate de tener espacio despejado antes de continuar.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Armar'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    setState(() => arming = true);
-    await widget.service.startMission(
-      test: 'p02',
-      params: const {},
-      onStatus: (s) {
-        if (mounted) setState(() => status = s);
-      },
-    );
-    if (mounted) {
-      setState(() {
-        arming = false;
-        armed = true;
-      });
-    }
-  }
-
-  void _send({double fx = 0, double fz = 0, double tz = 0}) {
-    widget.service.sendControl(mode: _kP02Mode, fx: fx, fz: fz, tz: tz);
-  }
-
-  void _neutral() => _send();
-
-  void _stop() {
-    widget.service.stop();
-    setState(() {
-      armed = false;
-      status = 'STOP enviado -- desarmado';
-    });
-  }
-
-  Widget _dirButton(IconData icon, String label, VoidCallback onPress) {
-    return GestureDetector(
-      onTapDown: (_) => onPress(),
-      onTapUp: (_) => _neutral(),
-      onTapCancel: _neutral,
-      child: Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: AppTheme.celeste100,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppTheme.outline),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: AppTheme.blue600),
-            Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceMuted)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context); // requerido por AutomaticKeepAliveClientMixin
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.gamepad_outlined, size: 20, color: AppTheme.blue600),
-                const SizedBox(width: 8),
-                const Text('Control manual (P02)',
-                    style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.onSurface)),
-                const Spacer(),
-                ArmedChip(armed: armed),
-              ],
-            ),
-            const Divider(),
-            if (!armed)
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
-                onPressed: arming ? null : _confirmAndArm,
-                icon: arming
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.warning_amber_rounded),
-                label: Text(arming ? 'Armando...' : 'Armar P02'),
-              )
-            else ...[
-              const Text(
-                'Mantené presionado para mover; al soltar vuelve a neutro.',
-                style: TextStyle(fontSize: 11.5, color: AppTheme.onSurfaceMuted),
-              ),
-              const SizedBox(height: 10),
-              Center(
-                child: Column(
-                  children: [
-                    _dirButton(Icons.arrow_upward, 'Avanzar', () => _send(fx: _kManualFx)),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _dirButton(Icons.rotate_left, 'Izquierda', () => _send(tz: -_kManualTz)),
-                        const SizedBox(width: 72),
-                        _dirButton(Icons.rotate_right, 'Derecha', () => _send(tz: _kManualTz)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    _dirButton(Icons.arrow_downward, 'Retroceder', () => _send(fx: -_kManualFx)),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _dirButton(Icons.keyboard_double_arrow_up, 'Subir', () => _send(fz: _kManualFz)),
-                        const SizedBox(width: 24),
-                        _dirButton(Icons.keyboard_double_arrow_down, 'Bajar', () => _send(fz: -_kManualFz)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
-                  onPressed: _stop,
-                  icon: const Icon(Icons.stop),
-                  label: const Text('STOP'),
-                ),
-              ),
-            ],
-            if (status.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(status,
-                  style: const TextStyle(fontSize: 12.5, color: AppTheme.onSurfaceMuted)),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ============================================================================
 // BANCO DE PRUEBAS -- equivalente de run_test.py p00 / p00m.
 //

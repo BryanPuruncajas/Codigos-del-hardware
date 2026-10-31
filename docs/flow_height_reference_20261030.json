@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-30",
+  "user_reports_flowdeck_attached": true,
+  "user_reports_flowdeck_horizontal_and_downward": true,
+  "physical_reference_values_are_approximate": true,
+  "measurements": [
+    {
+      "reference_cm": 66.0,
+      "seconds": 20.0,
+      "flow_frames": 199,
+      "valid_ranges": 199,
+      "invalid_ranges": 0,
+      "estimator_valid_frames": 0,
+      "armed_frames": 0,
+      "log": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\logs\\flow_height_reference\\20261030_165553_429747_66cm.jsonl",
+      "median_range_cm": 76.2,
+      "minimum_cm": 75.7,
+      "maximum_cm": 76.6,
+      "stddev_cm": 0.15,
+      "median_error_vs_estimate_cm": 10.2,
+      "mean_packet_age_ms": 11.1,
+      "imu_reported_tilt_median_deg": 74.78
+    },
+    {
+      "reference_cm": 93.0,
+      "seconds": 20.0,
+      "flow_frames": 199,
+      "valid_ranges": 199,
+      "invalid_ranges": 0,
+      "estimator_valid_frames": 0,
+      "armed_frames": 0,
+      "log": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\logs\\flow_height_reference\\20261030_165925_009373_93cm.jsonl",
+      "median_range_cm": 96.4,
+      "minimum_cm": 95.8,
+      "maximum_cm": 97.1,
+      "stddev_cm": 0.27,
+      "median_error_vs_estimate_cm": 3.4,
+      "mean_packet_age_ms": 11.1,
+      "imu_reported_tilt_median_deg": 75.0
+    }
+  ],
+  "communication_verified": true,
+  "range_repeatability_verified_at_two_positions": true,
+  "absolute_height_accuracy_validated": false,
+  "fixed_offset_supported_by_these_points": false,
+  "vertical_estimator_accepted_measurements": false,
+  "blocking_condition": "IMU reports about 75 degrees while Flowdeck is reported horizontal; sensor/beam mounting reference needs verification",
+  "barometer_used": false,
+  "motors_activated": false,
+  "calibration_changed": false
+}

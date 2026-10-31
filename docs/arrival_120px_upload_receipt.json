@@ -1,0 +1,14 @@
+{
+  "uploaded_at": "2026-10-28T21:24:13.8917232-05:00",
+  "port": "COM4",
+  "mac": "DC:B4:D9:39:B3:B4",
+  "arrival_width_px": 120,
+  "reference_surface_cm": 80,
+  "written_bytes": 842640,
+  "platformio_result": "SUCCESS",
+  "seconds": 17.64,
+  "upload_hash_verified": true,
+  "reset": "RTS",
+  "motor_test_executed": false,
+  "firmware_sha256": "E8131161837B599D367CE233FF5E19A9C70AF130DD455B2B1049F335CE9BC607"
+}

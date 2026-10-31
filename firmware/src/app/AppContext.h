@@ -5,7 +5,10 @@
 #include "util/DataTypes.h"
 #include "app/AppConfig.h"
 
+#include "mission/FlowHeight.h"
+
 struct AppContext {
+    FlowHeight flowHeight;
     FullBicopter* robot = nullptr;
     BaseCommunicator* comm = nullptr;
     float sensors[Robot::MAX_SENSORS] = {0};
@@ -15,4 +18,5 @@ struct AppContext {
     int mode = AppConfig::SAFE_STOP;
     bool resetRequested = false;
     unsigned long modeEnteredMs = 0;
+    uint32_t lastCommandMs=0;
 };

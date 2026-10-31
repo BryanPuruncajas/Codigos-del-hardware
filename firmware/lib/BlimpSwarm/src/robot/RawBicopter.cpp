@@ -1,4 +1,5 @@
 #include "RawBicopter.h"
+#include "MotorRouting.h"
 #include <Arduino.h>
 
 #define SERVO1 D0
@@ -34,8 +35,10 @@ void RawBicopter::actuate(const float actuators[],int size){
     if(!actuatorsArmed) return;
     servo1->act(actuators[2]);
     servo2->act(actuators[3]);
-    motor1->act(constrain(actuators[0],0.0f,motorPowerLimit));
-    motor2->act(constrain(actuators[1],0.0f,motorPowerLimit));
+    const auto routed=MotorRouting::outputs(constrain(actuators[0],0.0f,motorPowerLimit),
+                                           constrain(actuators[1],0.0f,motorPowerLimit));
+    motor1->act(routed.pin1);
+    motor2->act(routed.pin2);
     led->act(actuators[4]);
 }
 
@@ -130,8 +133,9 @@ void RawBicopter::commandMotorPowerTest(float motor1Power,float motor2Power,int 
 
     servo1->actMicroseconds(servo1Us);
     servo2->actMicroseconds(servo2Us);
-    motor1->act(motor1Power);
-    motor2->act(motor2Power);
+    const auto routed=MotorRouting::outputs(motor1Power,motor2Power);
+    motor1->act(routed.pin1);
+    motor2->act(routed.pin2);
 }
 
 void RawBicopter::calibrate(){

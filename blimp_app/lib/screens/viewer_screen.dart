@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
 import '../services/telemetry_service.dart';
-import '../widgets/aerostock_logo.dart';
 import '../widgets/telemetry_widgets.dart';
 
 class ViewerScreen extends StatefulWidget {
@@ -53,18 +52,22 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
+  void _showAppMenu(String action) {
+    if (action == 'demo') {
+      service.demoMode ? service.stopDemo() : service.startDemo();
+    } else if (action == 'connect') {
+      _showConnectDialog();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: const DecoratedBox(decoration: BoxDecoration(gradient: AppTheme.appBarGradient)),
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            AeroStockMark(size: 26, envelopeColor: Colors.white70),
-            SizedBox(width: 10),
-            Text('Telemetría'),
-          ],
+        title: const Text(
+          'Competencia',
+          overflow: TextOverflow.ellipsis,
         ),
         actions: [
           ListenableBuilder(
@@ -74,15 +77,27 @@ class _ViewerScreenState extends State<ViewerScreen> {
               child: ConnectionChip(service: service),
             ),
           ),
-          IconButton(
-            icon: Icon(service.demoMode ? Icons.science : Icons.science_outlined),
-            tooltip: 'Modo demostración (sin hardware)',
-            onPressed: () => service.demoMode ? service.stopDemo() : service.startDemo(),
+          PopupMenuButton<String>(
+            tooltip: 'Opciones de conexión',
+            icon: const Icon(Icons.more_vert),
+            onSelected: _showAppMenu,
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'demo',
+                child: ListTile(
+                  leading: Icon(service.demoMode ? Icons.stop_circle_outlined : Icons.science_outlined),
+                  title: Text(service.demoMode ? 'Detener demo' : 'Modo demostración'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'connect',
+                child: ListTile(
+                  leading: Icon(Icons.settings_ethernet),
+                  title: Text('Configurar conexión'),
+                ),
+              ),
+            ],
           ),
-          IconButton(
-              icon: const Icon(Icons.settings_ethernet),
-              onPressed: _showConnectDialog,
-              tooltip: 'Configurar conexión'),
         ],
       ),
       body: ListenableBuilder(
@@ -114,6 +129,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
               MissionOverviewCard(latest: service.latest),
               const SizedBox(height: 12),
               OverviewRow(latest: service.latest),
+              const SizedBox(height: 12),
+              FlowTelemetryPanel(latest: service.latest, history: service.flowHistory),
               const SizedBox(height: 12),
               ControlChart(
                 title: 'Altura en vivo',

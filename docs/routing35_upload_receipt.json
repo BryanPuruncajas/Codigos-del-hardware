@@ -1,0 +1,21 @@
+{
+  "uploaded_at": "2026-10-29T13:50:49.3935313-05:00",
+  "version": 35,
+  "port": "COM4",
+  "mac": "DC:B4:D9:39:B3:B4",
+  "written_bytes": 843312,
+  "result": "SUCCESS",
+  "seconds": 16.05,
+  "hash_verified": true,
+  "reset": "RTS",
+  "motor_swap": true,
+  "forward_sign": -1,
+  "forward_demand": 0.12,
+  "tilt_limit_deg": 28,
+  "support_max": 0.25,
+  "python_tests": 14,
+  "native_suite": "routing_v35_tests.sh PASS",
+  "motor_test_executed": false,
+  "physical_validation": false,
+  "firmware_sha256": "E19D8DE05DFA225D6322058AB1825884EA31196C1AC711AF069AA45D4F7EC361"
+}

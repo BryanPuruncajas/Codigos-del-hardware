@@ -1,4 +1,6 @@
 import 'dart:math';
+import 'dart:async';
+import '../models/mission_guidance.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../core/theme/app_theme.dart';
@@ -17,6 +19,7 @@ double _niceGridStep(double span) {
 }
 
 const Map<String, List<String>> kTelemetryGroups = {
+  'Altura Flowdeck': ['flow_height_filtered', 'flow_height_vz', 'flow_control_age_ms', 'flow_height_flags'],
   'Movimiento': ['roll', 'pitch', 'vertical_velocity'],
   'Visión': ['nicla_x', 'nicla_y', 'nicla_w', 'nicla_h', 'nicla_distance', 'nicla_flag'],
   'Actuadores': ['servo1', 'servo2', 'motor1', 'motor2', 'mode'],
@@ -24,6 +27,7 @@ const Map<String, List<String>> kTelemetryGroups = {
 };
 
 const Map<String, IconData> kTelemetryGroupIcons = {
+  'Altura Flowdeck': Icons.height,
   'Movimiento': Icons.threed_rotation,
   'Visión': Icons.camera_alt,
   'Actuadores': Icons.settings_input_component,
@@ -31,14 +35,14 @@ const Map<String, IconData> kTelemetryGroupIcons = {
 };
 
 const List<String> kMissionStateNames = [
-  'BUSCANDO', 'ACERCANDO', 'CONFIRMANDO', 'ESCAPANDO', 'ESPERANDO', 'LISTO',
+  'BUSCANDO', 'ACERCANDO', 'CONFIRMANDO', 'GIRANDO', 'ADQUIRIENDO', 'LISTO', 'GIRO FALLIDO',
 ];
 const List<String> kMissionStateShort = [
-  'Buscar', 'Acercar', 'Confirmar', 'Escapar', 'Esperar', 'Listo',
+  'Buscar', 'Acercar', 'Confirmar', 'Girar', 'Adquirir', 'Listo', 'Fallo',
 ];
 const List<IconData> kMissionStateIcons = [
   Icons.travel_explore, Icons.center_focus_strong, Icons.check_circle_outline,
-  Icons.directions_run, Icons.hourglass_bottom, Icons.flag,
+  Icons.rotate_right, Icons.center_focus_weak, Icons.flag, Icons.error_outline,
 ];
 
 // ============================================================================
@@ -168,7 +172,11 @@ class OverviewRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final height = latest['height'];
+    final flowOnly = (latest['vertical_profile_version'] ?? 0) >= 39;
+    final rangeValid = latest['flow_height_source'] == 2 && ((latest['flow_height_flags'] ?? 0).round() & 8) != 0;
+    final received = latest['flow_control_received_at_ms'];
+    final fresh = received != null && DateTime.now().millisecondsSinceEpoch - received < 1500;
+    final height = !flowOnly || (rangeValid && fresh) ? latest['height'] : null;
     final yawDeg = latest['yaw'] != null ? latest['yaw']! * 180.0 / 3.14159265 : null;
     final battery = latest['battery'];
     final batteryPct = battery == null ? null : (((battery - 6.6) / (8.4 - 6.6)) * 100).clamp(0, 100);
@@ -182,7 +190,7 @@ class OverviewRow extends StatelessWidget {
         children: [
           StatTile(
             icon: Icons.height,
-            label: 'Altura',
+            label: flowOnly ? 'Altura Flowdeck' : 'Altura',
             value: height != null ? height.toStringAsFixed(2) : '—',
             unit: 'm',
             color: AppTheme.blue500,
@@ -207,7 +215,7 @@ class OverviewRow extends StatelessWidget {
           StatTile(
             icon: Icons.speed,
             label: 'Vel. vertical',
-            value: latest['vertical_velocity'] != null
+            value: (!flowOnly || (rangeValid && fresh)) && latest['vertical_velocity'] != null
                 ? latest['vertical_velocity']!.toStringAsFixed(2)
                 : '—',
             unit: 'm/s',
@@ -217,6 +225,298 @@ class OverviewRow extends StatelessWidget {
       ),
     );
   }
+}
+
+// ============================================================================
+// FLOWDECK -- F6 llega desde el ESP del blimp. Esta tarjeta separa los datos
+// de navegacion del resto de diagnosticos para que se puedan leer en vuelo.
+// ============================================================================
+
+class FlowTelemetryPanel extends StatelessWidget {
+  final Map<String, double> latest;
+  final List<FlowSample> history;
+  const FlowTelemetryPanel({super.key, required this.latest, required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    final ageMs = latest['flow_age_ms'];
+    final flags = (latest['flow_flags'] ?? 0).round();
+    final hasPacket = ageMs != null && ageMs >= 0;
+    final flowValid = (flags & 1) != 0;
+    final rangeValid = (flags & 2) != 0;
+    final receivedAt = latest['flow_received_at_ms'];
+    final linkAge = receivedAt == null ? double.infinity : DateTime.now().millisecondsSinceEpoch - receivedAt;
+    final fresh = hasPacket && ageMs <= 500 && flowValid && linkAge <= 1500;
+    final statusColor = fresh ? AppTheme.success : (hasPacket ? AppTheme.warning : AppTheme.neutral);
+    final status = fresh ? 'FRESCO' : (hasPacket ? 'VENCIDO' : 'ESPERANDO F6');
+    final dx = latest['flow_dx'] ?? 0;
+    final dy = latest['flow_dy'] ?? 0;
+    final rangeMm = latest['flow_range_mm'];
+    final quality = latest['flow_quality'];
+    final source = latest['flow_height_source']?.round();
+    const sourceNames = {0: 'Sin altura Flowdeck', 1: 'Perfil anterior: barometro', 2: 'Flowdeck', 3: 'Perfil anterior: respaldo'};
+    final estimatorFlags = (latest['flow_height_flags'] ?? 0).round();
+    final flowOnly = (latest['vertical_profile_version'] ?? 0) >= 39;
+    final controlReceived = latest['flow_control_received_at_ms'];
+    final controlFresh = controlReceived != null && DateTime.now().millisecondsSinceEpoch - controlReceived <= 1500;
+    final heightValid = (estimatorFlags & 8) != 0 && (!flowOnly || (source == 2 && controlFresh));
+    final rangeFresh = (estimatorFlags & 2) != 0 && (!flowOnly || controlFresh);
+    final opticalReady = (estimatorFlags & 128) != 0 && (!flowOnly || controlFresh);
+    final sourceLabel = flowOnly && !heightValid ? 'Sin altura Flowdeck' : (sourceNames[source] ?? 'Desconocido');
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.sensors, color: statusColor, size: 19),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('Flowdeck',
+                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: AppTheme.navy900)),
+                ),
+                Chip(
+                  avatar: Icon(fresh ? Icons.wifi : Icons.wifi_off, color: Colors.white, size: 15),
+                  label: Text(status),
+                  backgroundColor: statusColor,
+                  labelStyle: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (source != null) ...[
+              Text('Altura: $sourceLabel',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 18, runSpacing: 12, children: [
+                _FlowMetric(label: flowOnly ? 'Altura de control' : 'Altura local', value: heightValid ? (latest['flow_fused_height']?.toStringAsFixed(2) ?? '—') : '—', unit: 'm'),
+                _FlowMetric(label: 'Altura al suelo', value: rangeFresh ? (latest['flow_height_filtered']?.toStringAsFixed(2) ?? '—') : '—', unit: 'm'),
+                _FlowMetric(label: 'Vz Flowdeck', value: rangeFresh ? (latest['flow_height_vz']?.toStringAsFixed(3) ?? '—') : '—', unit: 'm/s'),
+                _FlowMetric(label: 'Vz estimada', value: heightValid ? (latest['flow_fused_vz']?.toStringAsFixed(3) ?? '—') : '—', unit: 'm/s'),
+                _FlowMetric(label: 'Flujo X', value: opticalReady ? (latest['flow_rate_x']?.toStringAsFixed(1) ?? '—') : '—', unit: 'cuentas/s'),
+                _FlowMetric(label: 'Flujo Y', value: opticalReady ? (latest['flow_rate_y']?.toStringAsFixed(1) ?? '—') : '—', unit: 'cuentas/s'),
+              ]),
+              const SizedBox(height: 8),
+              const Text('En v39 la altura y Vz provienen solo de Flowdeck. X/Y requieren calibracion para expresarse en m/s.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.onSurfaceMuted)),
+              if ((flowOnly && !heightValid) || source == 0 || source == 3)
+                const Text('Rango no disponible: comprobar enlace, inclinacion y suelo.',
+                    style: TextStyle(color: AppTheme.warning)),
+              const Divider(height: 24),
+            ],
+            if (!hasPacket)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Text('Esperando telemetría F6 desde el ESP del blimp.',
+                    style: TextStyle(color: AppTheme.onSurfaceMuted)),
+              )
+            else ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 118,
+                    height: 112,
+                    child: CustomPaint(
+                      painter: _FlowVectorPainter(dx: dx, dy: dy, color: statusColor),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Wrap(
+                      spacing: 18,
+                      runSpacing: 12,
+                      children: [
+                        _FlowMetric(label: 'Delta X', value: dx.toStringAsFixed(1), unit: 'cuentas'),
+                        _FlowMetric(label: 'Delta Y', value: dy.toStringAsFixed(1), unit: 'cuentas'),
+                        _FlowMetric(
+                            label: 'Distancia',
+                            value: rangeMm != null ? (rangeMm / 1000).toStringAsFixed(2) : '—',
+                            unit: 'm'),
+                        _FlowMetric(label: 'Calidad', value: quality == null || quality == 0 ? '—' : quality.toStringAsFixed(0), unit: ''),
+                        _FlowMetric(label: 'Edad', value: ageMs.toStringAsFixed(0), unit: 'ms'),
+                        _FlowMetric(
+                            label: 'Sensores',
+                            value: rangeValid ? 'Flow + rango' : 'Solo Flow',
+                            unit: ''),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              const Text('Historial de movimiento',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: AppTheme.navy900)),
+              const SizedBox(height: 6),
+              SizedBox(height: 150, child: _FlowHistoryChart(history: history)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FlowMetric extends StatelessWidget {
+  final String label;
+  final String value;
+  final String unit;
+  const _FlowMetric({required this.label, required this.value, required this.unit});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 88,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.onSurfaceMuted)),
+            const SizedBox(height: 2),
+            Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppTheme.navy900)),
+            if (unit.isNotEmpty)
+              Text(unit, style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceMuted)),
+          ],
+        ),
+      );
+}
+
+class _FlowHistoryChart extends StatelessWidget {
+  final List<FlowSample> history;
+  const _FlowHistoryChart({required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    if (history.length < 2) {
+      return const Center(
+        child: Text('Esperando muestras Flow...', style: TextStyle(color: AppTheme.onSurfaceMuted)),
+      );
+    }
+    final samples = history.length > 60 ? history.sublist(history.length - 60) : history;
+    final x0 = samples.first.t;
+    final x1 = samples.last.t == x0 ? x0 + 1 : samples.last.t;
+    final values = [...samples.map((s) => s.dx), ...samples.map((s) => s.dy)];
+    final peak = values.map((v) => v.abs()).reduce(max).clamp(1.0, 20.0) + 0.8;
+
+    return Column(
+      children: [
+        const Row(
+          children: [
+            _FlowLegend(color: AppTheme.blue500, label: 'dx'),
+            SizedBox(width: 14),
+            _FlowLegend(color: AppTheme.celeste, label: 'dy'),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          child: LineChart(
+            LineChartData(
+              minX: x0,
+              maxX: x1,
+              minY: -peak,
+              maxY: peak,
+              gridData: FlGridData(show: true, drawVerticalLine: false,
+                  horizontalInterval: max(1.0, peak / 2),
+                  getDrawingHorizontalLine: (_) => const FlLine(color: AppTheme.outline, strokeWidth: 1)),
+              titlesData: const FlTitlesData(
+                topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              ),
+              borderData: FlBorderData(show: false),
+              lineTouchData: LineTouchData(enabled: false),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: samples.map((s) => FlSpot(s.t, s.dx)).toList(),
+                  isCurved: true,
+                  color: AppTheme.blue500,
+                  barWidth: 2.5,
+                  dotData: const FlDotData(show: false),
+                ),
+                LineChartBarData(
+                  spots: samples.map((s) => FlSpot(s.t, s.dy)).toList(),
+                  isCurved: true,
+                  color: AppTheme.celeste,
+                  barWidth: 2.5,
+                  dotData: const FlDotData(show: false),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FlowLegend extends StatelessWidget {
+  final Color color;
+  final String label;
+  const _FlowLegend({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 10, height: 3, color: color),
+          const SizedBox(width: 5),
+          Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.onSurfaceMuted)),
+        ],
+      );
+}
+
+class _FlowVectorPainter extends CustomPainter {
+  final double dx;
+  final double dy;
+  final Color color;
+  const _FlowVectorPainter({required this.dx, required this.dy, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final axis = Paint()..color = AppTheme.outline..strokeWidth = 1;
+    canvas.drawLine(Offset(10, center.dy), Offset(size.width - 10, center.dy), axis);
+    canvas.drawLine(Offset(center.dx, 10), Offset(center.dx, size.height - 10), axis);
+    final scale = min(size.width, size.height) / 12;
+    final tip = Offset(
+      center.dx + dx.clamp(-5.0, 5.0) * scale,
+      center.dy - dy.clamp(-5.0, 5.0) * scale,
+    );
+    final arrow = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(center, tip, arrow);
+    final direction = atan2(tip.dy - center.dy, tip.dx - center.dx);
+    final head = Path()
+      ..moveTo(tip.dx, tip.dy)
+      ..lineTo(tip.dx - 10 * cos(direction - 0.5), tip.dy - 10 * sin(direction - 0.5))
+      ..lineTo(tip.dx - 10 * cos(direction + 0.5), tip.dy - 10 * sin(direction + 0.5))
+      ..close();
+    canvas.drawPath(head, Paint()..color = color);
+    final style = TextStyle(fontSize: 10, color: AppTheme.onSurfaceMuted);
+    final x = TextPainter(text: TextSpan(text: 'X', style: style), textDirection: TextDirection.ltr)..layout();
+    final y = TextPainter(text: TextSpan(text: 'Y', style: style), textDirection: TextDirection.ltr)..layout();
+    x.paint(canvas, Offset(size.width - 16, center.dy + 4));
+    y.paint(canvas, Offset(center.dx + 4, 4));
+  }
+
+  @override
+  bool shouldRepaint(covariant _FlowVectorPainter oldDelegate) =>
+      oldDelegate.dx != dx || oldDelegate.dy != dy || oldDelegate.color != color;
 }
 
 // ============================================================================
@@ -232,7 +532,7 @@ class MissionOverviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stateVal = latest['mission_state'];
-    final stateIdx = stateVal != null ? stateVal.toInt().clamp(0, 5) : null;
+    final stateIdx = stateVal != null ? stateVal.toInt().clamp(0, 6) : null;
     final visited = latest['visited']?.toInt() ?? 0;
     final target = latest['target_count']?.toInt().clamp(1, 8) ?? 1;
     final elapsed = latest['elapsed_s'];
@@ -261,8 +561,10 @@ class MissionOverviewCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          Text('Globos visitados: $visited / $target',
+          Text('Contactos confirmados: $visited / $target',
               style: const TextStyle(color: Colors.white, fontSize: 14)),
+          const SizedBox(height: 8),
+          _motionFeedback(),
           const SizedBox(height: 16),
           BalloonTrack(visited: visited, target: target, missionState: stateIdx),
           const SizedBox(height: 18),
@@ -277,6 +579,105 @@ class MissionOverviewCard extends StatelessWidget {
     final m = total ~/ 60;
     final sec = total % 60;
     return '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
+  }
+
+  Widget _motionFeedback() {
+    return MissionGuidanceView(latest: latest);
+  }
+}
+
+class MissionGuidanceView extends StatefulWidget {
+  final Map<String, double> latest;
+  const MissionGuidanceView({super.key, required this.latest});
+  @override
+  State<MissionGuidanceView> createState() => _MissionGuidanceViewState();
+}
+
+class _MissionGuidanceViewState extends State<MissionGuidanceView> {
+  final guidance = MissionGuidance();
+  Timer? timer;
+  double? lastReceived;
+  int displayCode = 6;
+  @override
+  void initState() {
+    super.initState();
+    timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      if (mounted) setState(() {}); // also expire stale data without new packets
+    });
+  }
+  @override
+  void dispose() { timer?.cancel(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final latest = widget.latest;
+    final received = latest['mission_decision_received_ms'];
+    final age = received == null ? double.infinity :
+        DateTime.now().millisecondsSinceEpoch - received;
+    final mode = latest['mode']?.round() ?? 0;
+    final valid = age >= 0 && age < 1500 && mode >= 17 && mode <= 22;
+    final reason = latest['mission_motion_reason']?.round();
+    final waypoint = latest['mission_waypoint']?.round();
+    final yawError = latest['mission_yaw_error_deg'];
+    final bench = latest['mission_bench'] == 1;
+    final armed = latest['armed'] == 1;
+    if (!valid) {
+      guidance.reset();
+      lastReceived = null;
+    } else if (reason != null && received != lastReceived) {
+      displayCode = guidance.update(reason, waypoint ?? 0,
+          DateTime.now().millisecondsSinceEpoch);
+      lastReceived = received;
+    }
+    const instructions = {
+      0: 'Espere · sin orden de avance',
+      1: 'No avance · vuelva a encuadrar el globo',
+      2: 'No avance · estabilizando altura',
+      4: 'Mantenga el rumbo · buscando el siguiente globo',
+      6: 'Centre el globo y mantenga el giro quieto',
+      7: 'Puede acercarse lentamente',
+      8: 'No avance · mantenga la posición para confirmar llegada',
+      9: 'Recorrido terminado',
+      10: 'Giro no completado · detenga y reinicie la prueba',
+      12: 'Mantenga el rumbo · encuadre el globo completo',
+      13: 'Objetivo rechazado por tamaño · encuadre el siguiente globo',
+      14: 'No avance · esperando respuesta nueva de la cámara',
+      15: 'No avance · altura o velocidad vertical no válidas',
+    };
+    String status = 'Sin diagnóstico reciente de avance (F8)';
+    if (valid) {
+      status = instructions[displayCode] ?? 'Espere confirmación';
+      if (displayCode == 3 || displayCode == 11) {
+        if (yawError == null || !yawError.isFinite) {
+          status = 'No avance · esperando referencia de giro';
+        } else if (yawError.abs() <= 5) {
+          status = 'Detenga el giro y mantenga quieto';
+        } else {
+          final degrees = max(5, (yawError.abs() / 5).round() * 5);
+          status = 'Gire despacio a la ${yawError > 0 ? 'izquierda' : 'derecha'} · faltan ≈$degrees°';
+        }
+      }
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(status, style: const TextStyle(color: Colors.white, fontSize: 13)),
+        if (valid && bench && latest['elapsed_s'] != null)
+          Text('P12 · máximo 4 minutos · STOP automático al finalizar',
+              style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        if (valid)
+          Text([
+            if (waypoint != null && waypoint > 0) 'Waypoint $waypoint',
+            if (bench || !armed) 'DESARMADO · órdenes simuladas',
+          ].join(' · '), style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        if (valid)
+          const Text('Guía visual suavizada; la ESP conserva sus decisiones inmediatas.',
+              style: TextStyle(color: Colors.white70, fontSize: 11)),
+        if (valid)
+          const Text('Sin avance solicitado no significa inmóvil ni frenado.',
+              style: TextStyle(color: Colors.white70, fontSize: 11)),
+      ],
+    );
   }
 }
 

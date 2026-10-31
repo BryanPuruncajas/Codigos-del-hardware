@@ -1,0 +1,38 @@
+[
+  {
+    "log": "20261028_143801_276688.jsonl",
+    "note": "Replay of downsampled F9, no full-rate source reconstruction",
+    "28": {
+      "samples": 150,
+      "trusted": 150,
+      "power_correction_rms": 0.03541987,
+      "max_correction": 0.07,
+      "power_total_variation": 4.72065778
+    },
+    "29": {
+      "samples": 150,
+      "trusted": 0,
+      "power_correction_rms": 0.0,
+      "max_correction": 0.0,
+      "power_total_variation": 0.0
+    }
+  },
+  {
+    "log": "20261028_143922_032905.jsonl",
+    "note": "Replay of downsampled F9, no full-rate source reconstruction",
+    "28": {
+      "samples": 150,
+      "trusted": 150,
+      "power_correction_rms": 0.03589552,
+      "max_correction": 0.07,
+      "power_total_variation": 5.04405585
+    },
+    "29": {
+      "samples": 150,
+      "trusted": 0,
+      "power_correction_rms": 0.0,
+      "max_correction": 0.0,
+      "power_total_variation": 0.0
+    }
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "prepared_at": "2026-10-29T11:37:44.2340837-05:00",
+  "support_version": 33,
+  "start_trim": 0.18,
+  "max_support": 0.25,
+  "arrival_width_px": 120,
+  "build_result": "SUCCESS",
+  "build_seconds": 17.7,
+  "python_guard_tests_passed": 14,
+  "native_suite": "groundstation/lift_v33_tests.sh PASS",
+  "uploaded": false,
+  "physical_validation": false,
+  "firmware_sha256": "1CEB45C237A0E1239C4C029E67BC13FEAA91F4D2D7C5AE82DE7FB2542469827E"
+}

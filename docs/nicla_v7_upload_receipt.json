@@ -1,0 +1,11 @@
+{
+  "version": "N03-panel-v7-reacquire",
+  "port": "COM10",
+  "installed": "E:/main.py",
+  "bytes": 18263,
+  "sha256": "3e930d6806cede7ff655853296c7bc9d36ba26c9ec16f31e655ca317419a2dd5",
+  "backup": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\vision\\backups\\nicla_main_pre_reacquire_20261028_190847_817070.py",
+  "backup_sha256": "a0c80566974aded1d75929c38ffc193930341e92ce065edb972481a6875283f4",
+  "running_verified": false,
+  "note": "File written/fsync/readback verified. Restart required. No ARM commands."
+}

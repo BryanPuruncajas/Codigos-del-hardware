@@ -1,0 +1,20 @@
+{
+  "client_date": "2026-10-30",
+  "compatible_control_version": 38,
+  "build_success": true,
+  "build_seconds": 6.55,
+  "destination": "FF:FF:FF:FF:FF:FF broadcast",
+  "channel": 1,
+  "uart_rx": "D7/GPIO44",
+  "uart_tx": "D6/GPIO43",
+  "uart_baud": 115200,
+  "packet_bytes": 16,
+  "input_format": "FLOW,sequence,dx,dy,range_mm,squal,motion; legacy dx,dy,z also supported",
+  "quality_forwarded": true,
+  "ram_bytes": 43504,
+  "flash_bytes": 694521,
+  "binary_sha256": "95BBBF2FF21415345462A198401742E31A89F9749A23840A50E3BF7AA06B0813",
+  "parser_test_passed": true,
+  "upload_performed": false,
+  "radio_test_performed": false
+}

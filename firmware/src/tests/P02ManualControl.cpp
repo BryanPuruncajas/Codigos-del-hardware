@@ -30,9 +30,10 @@ using ControlCommon::SERVO2_BACK_DEG;
 
 // Calibracion fisica validada en P00/P00M (16-08-2026)
 
-// P02 es una prueba manual limitada: usamos la potencia que ya fue validada
-// fisicamente en P00M para no depender del mixer/PID general.
-constexpr float P02_MOTOR_POWER = 0.20f;
+// P02 power is independent of the automatic mission. AUX0 carries percent;
+// zero preserves compatibility with the old app, now defaulting to 30%.
+constexpr float P02_DEFAULT_POWER = 0.30f;
+constexpr float P02_MAX_POWER = 0.50f;
 constexpr float COMMAND_DEADBAND = 0.001f;
 
 int degreesToPulseUs(float deg) {
@@ -54,6 +55,10 @@ void p02Manual(AppContext& ctx) {
     const float fx = ctx.command.params[AppConfig::PARAM_FX];
     const float fz = ctx.command.params[AppConfig::PARAM_FZ];
     const float tz = ctx.command.params[AppConfig::PARAM_TZ];
+    const float requestedPct=ctx.command.params[AppConfig::PARAM_AUX0];
+    const float requestedPower=(!isfinite(requestedPct) || requestedPct<0)?0.f:
+        (requestedPct==0?P02_DEFAULT_POWER:constrain(requestedPct*.01f,0.f,P02_MAX_POWER));
+    const float manualPower=constrain(requestedPower,0.f,ctx.robot->getMotorPowerLimit());
 
     // Posicion segura/base: ambos vectores de empuje alineados con Z.
     float servo1Deg = SERVO1_Z_DEG;
@@ -68,8 +73,8 @@ void p02Manual(AppContext& ctx) {
     const float absTz = fabsf(tz);
 
     if (absFx > COMMAND_DEADBAND && absFx >= absFz && absFx >= absTz) {
-        motor1Power = P02_MOTOR_POWER;
-        motor2Power = P02_MOTOR_POWER;
+        motor1Power = manualPower;
+        motor2Power = manualPower;
 
         if (fx > 0.0f) {
             // AVANCE validado: S1=120, S2=0
@@ -82,8 +87,8 @@ void p02Manual(AppContext& ctx) {
         }
     }
     else if (absTz > COMMAND_DEADBAND && absTz >= absFz) {
-        motor1Power = P02_MOTOR_POWER;
-        motor2Power = P02_MOTOR_POWER;
+        motor1Power = manualPower;
+        motor2Power = manualPower;
 
         if (tz > 0.0f) {
             // GIRO DERECHA validado: S1=120, S2=120
@@ -104,8 +109,8 @@ void p02Manual(AppContext& ctx) {
         servo2Deg = SERVO2_Z_DEG;
 
         if (fz > 0.0f) {
-            motor1Power = P02_MOTOR_POWER;
-            motor2Power = P02_MOTOR_POWER;
+            motor1Power = manualPower;
+            motor2Power = manualPower;
         }
     }
 
@@ -114,6 +119,9 @@ void p02Manual(AppContext& ctx) {
 
     if (ctx.robot->actuatorsAreArmed()) {
         ctx.robot->commandMotorPowerTest(motor1Power, motor2Power, servo1Us, servo2Us);
+    } else {
+        motor1Power=0.f;
+        motor2Power=0.f;
     }
 
     // Telemetria F3 debe representar lo que P02 realmente esta ordenando.

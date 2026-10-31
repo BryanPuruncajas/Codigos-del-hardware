@@ -24,8 +24,9 @@ NAME_TO_MODE = {
     'p07': modes.P07_VISUAL_CENTER, 'p08': modes.P08_ONE_BALLOON,
     'p09': modes.P09_VISIT_ESCAPE, 'p10': modes.P10_TWO_BALLOONS,
     'p11': modes.P11_FOUR_BALLOONS,
+    'p11t2': modes.P11_INFINITY,
 }
-ACTUATED = {'p02', 'p03', 'p04', 'p05', 'p07', 'p08', 'p09', 'p10', 'p11'}
+ACTUATED = {'p02', 'p03', 'p04', 'p05', 'p07', 'p08', 'p09', 'p10', 'p11', 'p11t2'}
 
 PACK_MARKER_V2 = 1 << 24
 
@@ -42,6 +43,8 @@ DEFAULT_ARGS = dict(
     yaw_kp=0.40, yaw_ki=1.00, yaw_kd=3.00,
     yaw_min_power=4.5, yaw_max_power=11.0, yaw_deadband_deg=3.0,
     yaw_servo_authority=75.0, yaw_base_power=0.0, yaw_success_deg=None,
+    yaw_support_hold=False, yaw_visual_hold=False, yaw_support_prepare=False,
+    yaw_support_min_power=14.0,
     vis_kp=0.10, vis_kd=0.015, vis_min_power=6.0, vis_max_power=10.0,
     vis_deadband_px=20.0, vis_fov_deg=90.0,
 )
@@ -148,6 +151,17 @@ def build_control_payload(args):
     types.SimpleNamespace armado con make_args() (telemetry_bridge.py):
     solo se usan sus atributos, nunca metodos de argparse.
     """
+    visual_hold=getattr(args,'yaw_visual_hold',False)
+    preparing=getattr(args,'yaw_support_prepare',False)
+    if preparing and not visual_hold:
+        raise ValueError('yaw_support_prepare requiere yaw_visual_hold')
+    if (getattr(args, 'yaw_support_hold', False) or visual_hold) and args.test != 'p03':
+        raise ValueError('yaw_support_hold solo es valido para P03; no desactiva avance en una mision')
+    motor_floor=getattr(args,'yaw_support_min_power',14.0)
+    if visual_hold and (not math.isfinite(motor_floor) or not math.isfinite(args.yaw_max_power) or
+                        not math.isfinite(args.yaw_base_power) or
+                        not 0 <= motor_floor <= args.yaw_base_power <= args.yaw_max_power <= 16.0):
+        raise ValueError('P03 visual requiere 0 <= minimo <= base <= maximo <= 16%')
     fx = 0.0; fz = args.height or 0.0; tx = 0.0
     tz = math.radians(args.yaw_deg) if args.yaw_deg is not None else 0.0
     aux = {}
@@ -156,10 +170,17 @@ def build_control_payload(args):
     ydb = _yaw_deadband(args)
 
     if args.test == 'p03':
-        yaw_pack, yeff = pack_yaw(args.yaw_min_power, args.yaw_max_power,
+        yaw_pack, yeff = pack_yaw(motor_floor if visual_hold else args.yaw_min_power, args.yaw_max_power,
                                    ydb, args.yaw_servo_authority, args.yaw_ki)
         aux = {5: args.yaw_kp, 6: args.yaw_kd, 7: yaw_pack,
                8: args.yaw_base_power / 100.0}
+        if getattr(args, 'yaw_support_hold', False) or visual_hold:
+            aux[9] = 2.0 if visual_hold else 1.0
+            if visual_hold:
+                fx=1.0 if preparing else 0.0
+                desc.append(f'P03 VISUAL experimental: sin barometro/avance; descenso minimo{yeff["min_pct"]:g}%; techo16%; STOP/fallo=0%; FX1=preparar FX0=regular')
+            else:
+                desc.append('P03 SUPPORT experimental: sin barometro/avance; giro progresivo; autoridad limitada a 25%; servo 30deg/s')
         desc.append('P03 YAW CASCADA v7 (transfiere a P05)')
         desc.append(f'  externo: Kp={args.yaw_kp:.3f} (rad/s por rad)  '
                      f'error truncado a +/-36deg')
@@ -205,7 +226,7 @@ def build_control_payload(args):
         desc.append(f'  vision: FOV={args.vis_fov_deg:.0f}deg  '
                      f'zona muerta={args.vis_deadband_px:.0f}px')
 
-    elif args.test in {'p08', 'p09', 'p10', 'p11'}:
+    elif args.test in {'p08', 'p09', 'p10', 'p11', 'p11t2'}:
         # Mapa de slots UNIFICADO para todas las misiones.
         #   FZ=altura | FX=altKp | TX=altKd | TZ=altKi
         #   AUX0(5)=altMax | AUX1(6)=altSlew

@@ -9,6 +9,8 @@
  * 
  */
 #include "LLC_ESPNow.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 
 volatile bool new_data_received = false;
 volatile uint8_t new_data[MAX_DATA_SIZE];
@@ -17,8 +19,32 @@ volatile bool verbose = true;  //FIXME: this should be a parameter
 volatile unsigned long esp_time_now;
 ParamManager manager;
 int delayMS = 1000;
+static portMUX_TYPE flow_packet_mux = portMUX_INITIALIZER_UNLOCKED;
+static FlowProtocol::Packet latest_flow_packet{};
+static uint32_t latest_flow_packet_ms = 0;
+static bool flow_packet_seen = false;
 
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len){
+
+    // Keep Flow Deck traffic out of the command buffer used by the base station.
+    if (data_len >= (int)sizeof(uint16_t)) {
+        uint16_t magic = 0;
+        memcpy(&magic, data, sizeof(magic));
+        if (magic == FlowProtocol::MAGIC) {
+            if (data_len == (int)sizeof(FlowProtocol::Packet)) {
+                FlowProtocol::Packet packet{};
+                memcpy(&packet, data, sizeof(packet));
+                if (packet.version == FlowProtocol::VERSION) {
+                    portENTER_CRITICAL(&flow_packet_mux);
+                    latest_flow_packet = packet;
+                    latest_flow_packet_ms = millis();
+                    flow_packet_seen = true;
+                    portEXIT_CRITICAL(&flow_packet_mux);
+                }
+            }
+            return;
+        }
+    }
 
     char macStr[18];
     if (verbose) {
@@ -57,6 +83,23 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len){
         Serial.println(data[1]);
         manager.setGroundMac(&data[1]);
     } 
+}
+
+bool readLatestFlowPacket(FlowProtocol::Packet& packet, uint32_t& ageMs) {
+    bool seen;
+    uint32_t receivedAt;
+    portENTER_CRITICAL(&flow_packet_mux);
+    seen = flow_packet_seen;
+    if (seen) {
+        packet = latest_flow_packet;
+        receivedAt = latest_flow_packet_ms;
+    } else {
+        receivedAt = 0;
+    }
+    portEXIT_CRITICAL(&flow_packet_mux);
+
+    ageMs = seen ? millis() - receivedAt : UINT32_MAX;
+    return seen;
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {

@@ -19,7 +19,8 @@
 void SensorSuite::startup() {
     SensorSuite::getPreferences();
     bnoSensor.startup();
-    barometer.startup();
+    flowVertical=VerticalDiagnostics{};
+    flowVertical.ageMs=UINT32_MAX;
     batterySensor.startup();
     for (int i = 0; i < 11; i++) {
         sensorValues[i] = 0;
@@ -31,19 +32,10 @@ bool SensorSuite::update() {
     bool updated = false;
     int tempCount = 0, offset = 0;
 
-    // Update and read values from barometer, if updated
-    if (barometer.update()) {
-        float* baroValues = barometer.readValues(tempCount);
-        for(int i = 1; i < tempCount-1; ++i) {
-            sensorValues[offset + i - 1] = baroValues[i];
-        }
-        offset += tempCount;
-        updated = true;
-        sensorValues[2] = sensorValues[2] * 0.9 + baroValues[3] * 0.1;
-    }
+    // No pressure or temperature acquisition. Slots 0..2 come from Flowdeck.
     offset = 3; 
     // Repeat the pattern for bnoSensor and batterySensor
-    if (!updated) {// prevent both baro and bno update on same tick.
+    { // Service the IMU independently of the radio range sample.
         if (bnoSensor.update()) {
             float* bnoValues = bnoSensor.readValues(tempCount);
             for(int i = 0; i < tempCount; ++i) {
@@ -79,7 +71,6 @@ float* SensorSuite::readValues(int& count) {
 
 void SensorSuite::getPreferences() {
     bnoSensor.getPreferences();
-    barometer.getPreferences();
     batterySensor.getPreferences();
     return;
 

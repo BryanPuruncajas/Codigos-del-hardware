@@ -1,0 +1,12 @@
+{
+  "board": "Nicla USB COM10 / E:",
+  "version": "N03-panel-v6-near",
+  "bytes": 17169,
+  "source": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\vision\\n03_panel\\nicla_balloon_mission_main.py",
+  "installed": "E:/main.py",
+  "sha256": "a0c80566974aded1d75929c38ffc193930341e92ce065edb972481a6875283f4",
+  "backup": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\vision\\backups\\nicla_main_pre_near_20261028_183117_218084.py",
+  "backup_sha256": "d2f9b8a2121fdd88082909321ee70a6dd8a5f1c916ab0328f021b63f12ec3e95",
+  "running_verified": false,
+  "note": "File installed and readback verified. Restart required to execute saved main. No motor commands."
+}

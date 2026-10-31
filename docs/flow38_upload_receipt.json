@@ -1,0 +1,19 @@
+{
+  "client_date": "2026-10-30",
+  "uploaded_at": "2026-10-30T12:06:22.1466844-05:00",
+  "version": 38,
+  "project": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\firmware",
+  "port": "COM4",
+  "mac": "DC:B4:D9:39:B3:B4",
+  "written_bytes": 850048,
+  "seconds": 15.45,
+  "result": "SUCCESS",
+  "hash_verified": true,
+  "firmware_sha256": "32D71794DB24B4458C6490D10109CC5176383456F7092D9AD75BD901F7C819EC",
+  "power_condition_confirmed": "outside PCB, no battery, USB only",
+  "reset": "RTS",
+  "app_uploaded": false,
+  "nicla_uploaded": false,
+  "flow_sender_uploaded": false,
+  "motor_trial_executed": false
+}

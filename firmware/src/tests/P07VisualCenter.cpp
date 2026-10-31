@@ -143,7 +143,9 @@ State ctrl;
 // activo con coordenadas vacias.
 bool detected(const AppContext& ctx) {
     const int flag = (int)ctx.sensors[SensorMap::NICLA_FLAG];
-    const float w = ctx.sensors[SensorMap::NICLA_W];
+    // Los campos VALUE contienen la deteccion real enviada en telemetria F2.
+    // El ROI interno del tracker puede moverse sin que se mueva el globo.
+    const float w = ctx.sensors[SensorMap::NICLA_W_VALUE];
     return ((flag & 0x40) != 0) && ((flag & 0x03) != 0) &&
            isfinite(w) && (w > 0.0f);
 }
@@ -265,7 +267,7 @@ void p07VisualCenter(AppContext& ctx) {
     // 250 Hz. Por eso ya no importa tanto que la Nicla reporte a 10 FPS.
     // ------------------------------------------------------------------
 
-    const float niclaX = ctx.sensors[SensorMap::NICLA_X];
+    const float niclaX = ctx.sensors[SensorMap::NICLA_X_VALUE];
     const bool hasTarget = detected(ctx) && isfinite(niclaX) && isfinite(yaw);
 
     float errorPx = 0.0f;

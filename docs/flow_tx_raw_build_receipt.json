@@ -1,0 +1,12 @@
+{
+  "version": "FLOW-TX-v2-UART_RAW",
+  "build_success": true,
+  "uploaded": true,
+  "sha256": "6C4B414976752037276918605F6C775F88BACD71AAA6860AD7D6854939A91ACE",
+  "bytes": 695264,
+  "change": "Consola UART_RAW cada 2 segundos; sin cambiar filtros, pines, protocolo o control",
+  "reason": "299 F6 frescas en 30 s; flags=1 sin rango valido en todas; se requiere ver z original",
+  "upload_verified": "COM3 MAC 7C:4F:AD:1D:CA:D4; PlatformIO SUCCESS 10.95s; hash verified",
+  "observation": "UART_RAW FLOW,19396,0,0,65535,13,48; source range=65535, valid UART lines and queued sends, no local errors; F6 fresh with invalid range",
+  "log": "C:\\Users\\stefa\\Desktop\\BLIMP\\Competencia\\Blimp\\Blimp\\Codigos-del-hardware\\logs\\flow_sender\\20261030_190026_657423.jsonl"
+}

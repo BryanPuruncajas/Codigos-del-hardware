@@ -135,9 +135,9 @@ void resetController(const Config& cfg, float reference, float vz) {
     ctrl.lastReference = reference;
     ctrl.lastDebugMs   = millis();
  
-    resetAltState(ctrl.alt, vz);
+    resetAltState(ctrl.alt, vz, cfg.limits.maxPower);
  
-    Serial.println("[P04] reset");
+    Serial.printf("[P04] reset: precarga I=%.3f (configuracion de peso actual)\n", ctrl.alt.integral);
     dumpConfig(cfg);
 }
  

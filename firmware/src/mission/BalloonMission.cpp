@@ -1,4 +1,7 @@
 #include "mission/BalloonMission.h"
+#include "mission/MissionHeightOptions.h"
+#include "sense/VerticalProfile.h"
+#include "mission/BalloonCourse.h"
 #include "app/AppConfig.h"
 #include "app/ControlCommon.h"
 #include "app/SensorMap.h"
@@ -7,6 +10,17 @@
 #include <math.h>
 
 namespace {
+struct MissionVertical {
+    float height=0,vz=0;bool healthy=false,independent=false,rangeVelocity=false;uint32_t sampleUs=0;
+};
+MissionVertical verticalObservation(const AppContext& ctx){
+    MissionVertical v;
+    const auto& f=ctx.flowHeight;
+    v.height=f.height;v.vz=f.vz;v.healthy=f.valid;
+    v.sampleUs=f.sampleTimeUs;v.independent=true;
+    v.rangeVelocity=f.source==FlowHeight::FLOW_RANGE && f.valid;
+    return v;
+}
 // GEOMETRIA COMPARTIDA
 // --------------------
 // Este archivo tenia su propia copia de las posiciones de servo, con
@@ -25,8 +39,6 @@ using ControlCommon::SERVO1_RIGHT_DEG;
 using ControlCommon::SERVO2_RIGHT_DEG;
 using ControlCommon::SERVO1_FORWARD_DEG;
 using ControlCommon::SERVO2_FORWARD_DEG;
-using ControlCommon::SERVO1_BACK_DEG;
-using ControlCommon::SERVO2_BACK_DEG;
 
 
 // ============================================================================
@@ -39,6 +51,10 @@ using ControlCommon::SERVO2_BACK_DEG;
 // ============================================================================
 constexpr float IMAGE_CENTER_X = 120.0f;
 constexpr float DEFAULT_VIS_DEADBAND_PX = 15.0f;  // 105..135 px
+// One-waypoint profile: brake rotation earlier; authority/pins unchanged.
+constexpr float N03_APPROACH_YAW_KP = .35f;
+constexpr uint32_t N03_APPROACH_TIMEOUT_MS = 180000; // host120s plus preparation margin
+constexpr uint32_t N03_RECOVERY_MS=15000;
 
 // ============================================================================
 // POTENCIAS DE MOVIMIENTO DE MISION
@@ -60,7 +76,8 @@ constexpr float DEFAULT_MULTI_TARGET_TURN_POWER = 0.10f;
 // ============================================================================
 // UMBRAL DE VISITA
 // ----------------
-// Se compara contra NICLA_W. OJO: el significado de ese campo CAMBIO el
+// Se compara contra NICLA_W_VALUE, el tamano de la deteccion enviado en F2.
+// OJO: el significado de ese campo CAMBIO el
 // 23/08. Antes la Nicla mandaba int(10*val), o sea la CONFIANZA de deteccion
 // multiplicada por 10: no eran pixeles, siempre salia cuadrado y llegaba a
 // 259 en un frame de 240. Ahora manda un diametro equivalente en pixeles
@@ -83,6 +100,16 @@ constexpr float DEFAULT_MULTI_TARGET_TURN_POWER = 0.10f;
 // 60 pedia el maximo teorico que un acercamiento volado casi nunca toca.
 // Bajado con margen bajo el pico tipico observado.
 constexpr float VISIT_SCORE_THRESHOLD = 38.0f;
+// New detector reports bounding-box width, not the historical equivalent diameter.
+// User-selected provisional reference 2026-10-28: about 80 cm camera-to-surface,
+// about 120 px wide. Latest manual trial: initial 80 cm 121..134 px;
+// return 80 cm 93..101 px. Size is orientation/segmentation dependent,
+// so 120 px is an approximate operational reference, not a ranging model.
+// This is estimated arrival, NOT a physical contact measurement.
+// Define zero explicitly to disable automatic arrival.
+#ifndef N03_VISIT_WIDTH_PX
+#define N03_VISIT_WIDTH_PX 120
+#endif
 
 // SIGNO DE LA CONVERSION PIXEL -> YAW
 // -----------------------------------
@@ -121,8 +148,10 @@ constexpr unsigned long VISION_UPDATE_MS = 100;
 // mas abajo) siguiendo la asignacion analitica de MochiSwarm (Xu et al.
 // 2025, ecs. 4,5,9-11) en vez de una fraccion fija.
 constexpr int CLOSE_FRAMES_REQUIRED = 3;
-constexpr int LOST_FRAMES_REQUIRED = 8;
-constexpr unsigned long ESCAPE_MS = 1800;
+constexpr unsigned long TURN_SETTLE_MS = 300;
+constexpr unsigned long TURN_TIMEOUT_MS = 20000;
+constexpr float TURN_TOLERANCE_RAD = 5.0f * PI / 180.0f;
+constexpr float TURN_RATE_TOLERANCE = 0.10f;
 
 // Nicla no entrega ID de cada globo. Despues de una visita se exige girar
 // al menos 45 grados adicionales antes de aceptar una nueva deteccion.
@@ -159,11 +188,11 @@ constexpr float VISION_REF_SMOOTH = 0.5f;
 //
 // Mientras esta centrando (SOLO en esta rama de APPROACH), la demanda de
 // altura que entra al mixer se topa a una fraccion de su maximo. Fuera de
-// aca -- SEARCH, WAIT_TARGET_LOST, avance ya centrado -- la altura sigue
+// aca -- SEARCH, giro al siguiente, avance ya centrado -- la altura sigue
 // con autoridad completa, porque ahi no hay un centrado fino que proteger.
 constexpr float APPROACH_ALT_POWER_FRACTION = 0.5f;
 
-// MISMO PROBLEMA EN SEARCH/WAIT_TARGET_LOST
+// MISMO PROBLEMA EN SEARCH
 // -------------------------------------------
 // Confirmado el 24/08: "gira muy rapido, no le da chance a la camara de ver
 // bien el globo" durante SEARCH (sin target a la vista, girando ciego).
@@ -385,7 +414,7 @@ AltitudeConfig getAltitudeConfig(const AppContext& ctx) {
     };
 }
 
-void resetAltitudeController(float reference, float rawVz) {
+void resetAltitudeController(float reference, float rawVz, float maxPower) {
     altitudeCtrl.initialized = true;
     altitudeCtrl.filteredVz = isfinite(rawVz) ? rawVz : 0.0f;
     altitudeCtrl.integralPower = 0.0f;
@@ -396,7 +425,11 @@ void resetAltitudeController(float reference, float rawVz) {
     // El PID real de altura vive ahora en ControlCommon::AltState. Sin este
     // reset se heredaba el integral y la potencia de una correccion anterior
     // o de otro intento de mision, y el lazo arrancaba con un sesgo invisible.
-    ControlCommon::resetAltState(missionAlt, rawVz);
+    ControlCommon::resetAltState(missionAlt, rawVz, maxPower);
+}
+
+float getN03PowerCeiling(const AppContext& ctx) {
+    return fminf(AdaptiveLift::HARD_MAX,getAltitudeConfig(ctx).maxPower);
 }
 
 float calculateAltitudePower(float reference,
@@ -479,7 +512,7 @@ VisualConfig getVisualConfig(const AppContext& ctx, int targetCount) {
 
     const float minPower   = ctx.command.params[AppConfig::PARAM_AUX2];
     const float maxPower   = ctx.command.params[AppConfig::PARAM_AUX3];
-    const float deadbandPx = ctx.command.params[AppConfig::PARAM_AUX4];
+    const float deadbandPx = MissionHeightOptions::decode(ctx.command.params[AppConfig::PARAM_AUX4]).deadband;
 
     const bool valid =
         isfinite(minPower) && minPower >= 0.0f &&
@@ -502,15 +535,32 @@ VisualConfig getVisualConfig(const AppContext& ctx, int targetCount) {
 // ============================================================================
 // BALLOON MISSION - MISMA MAQUINA DE ESTADOS DE LA VERSION LARGA VALIDADA
 // ============================================================================
-void BalloonMission::configure(int targetCount, bool stopAfterVisit) {
-    targetCount_ = targetCount;
+void BalloonMission::configure(int targetCount, bool stopAfterVisit, int track) {
+    // Four-waypoint course closes at 1: five confirmed contacts, including start.
+    targetCount_ = targetCount == 4 ? 5 : targetCount;
+    track_ = track == 2 ? 2 : 1;
     stopAfterVisit_ = stopAfterVisit;
 }
 
 void BalloonMission::reset(AppContext& ctx) {
+    // Entering/resetting a mission is not the same as requesting another
+    // waypoint. Keep an already confirmed, fresh N03 target in front of us.
+    // Otherwise a valid PARTIAL is erased and SEARCH starts a blind turn.
+    const auto& feedback = ctx.robot->sensorsuite.niclaFeedback();
+    const bool keepTarget = feedback.protocol == NiclaFeedback::N03_PROTOCOL &&
+        !feedback.resetPending && detected(ctx);
+    visualHeight_.reset();
+    visualHeightSeen_ = false;
+    visualHeightLastSeenMs_ = millis();
+    visualHeightPower_ = 0;
+    visualHeightLastUs_ = micros();
     visited_ = 0;
     closeFrames_ = 0;
-    lostFrames_ = 0;
+    turnSettled_ = false;
+    // Consume the retained observation once on the first update, even when
+    // no new UART frame has arrived since reset (also valid at uint32 wrap).
+    lastVisionGeneration_ = feedback.generation - (keepTarget ? 1U : 0U);
+    if (!keepTarget) ctx.robot->sensorsuite.resetNiclaTarget();
     searchInitialized_ = false;
     missionStartMs_ = millis();
 
@@ -524,37 +574,99 @@ void BalloonMission::reset(AppContext& ctx) {
     // caian al else y fijaban searchHeight_ a la altura ACTUAL. Si la mision
     // arrancaba desde el piso, el supervisor veia error ~0 y nunca ordenaba
     // el despegue: el blimp se quedaba en el suelo buscando globos.
-    if (isfinite(requestedHeight) &&
-        requestedHeight > 0.05f) {
+    // Relative barometric readings can legitimately be negative or zero.
+    // The host supplies an explicit height; do not silently replace its target.
+    if (isfinite(requestedHeight)) {
         searchHeight_ = requestedHeight;
     } else {
         searchHeight_ = currentHeight;
     }
 
     initialHeight_ = currentHeight;
+    visualHeightAnchor_ = currentHeight;
     yawRef_ = ctx.sensors[SensorMap::YAW];
+    courseYaw_ = yawRef_; // At RESET align the vehicle parallel to 1 -> 2.
+    routeYawRef_ = courseYaw_;
+    lastVisitedArea_ = 0;
+    Serial.printf("[COURSE] track=%d reference_yaw=%.3f contacts=%d arrival_calibrated=%u target_preserved=%u\n",
+                  track_, courseYaw_, targetCount_, (unsigned)(N03_VISIT_WIDTH_PX > 0),
+                  (unsigned)keepTarget);
 
     altitudeCorrectionActive_ = false;
     altitudePauseStartMs_ = 0;
 
     resetAltitudeController(
         searchHeight_,
-        ctx.sensors[SensorMap::VERTICAL_VELOCITY]);
+        ctx.sensors[SensorMap::VERTICAL_VELOCITY],
+        getAltitudeConfig(ctx).maxPower);
     resetMissionYaw(ctx.sensors[SensorMap::YAW]);
 
-    enter(ctx, SEARCH);
+    enter(ctx, keepTarget ? APPROACH : SEARCH);
 }
 
 bool BalloonMission::detected(const AppContext& ctx) const {
+    const auto& feedback = ctx.robot->sensorsuite.niclaFeedback();
+    if (!feedback.fresh) return false;
+    if (feedback.protocol == NiclaFeedback::N03_PROTOCOL) {
+        // N03 emite PARTIAL solo con tracker confirmado. Permitir tambien
+        // adquisicion cercana inicial; nunca implica visita/contacto.
+        const bool usableState = feedback.state == NiclaFeedback::FULL ||
+            feedback.state == NiclaFeedback::PARTIAL;
+        const float x = ctx.sensors[SensorMap::NICLA_X_VALUE];
+        const float y = ctx.sensors[SensorMap::NICLA_Y_VALUE];
+        const float w = ctx.sensors[SensorMap::NICLA_W_VALUE];
+        const float h = ctx.sensors[SensorMap::NICLA_H_VALUE];
+        const int flag = (int)ctx.sensors[SensorMap::NICLA_FLAG];
+        return usableState && (flag == 0x41 || flag == 0x42) &&
+            isfinite(x) && x >= 0 && x < 240 && isfinite(y) && y >= 0 && y < 160 &&
+            isfinite(w) && w > 0 && w <= 240 && isfinite(h) && h > 0 && h <= 160;
+    }
     const int flag = (int)ctx.sensors[SensorMap::NICLA_FLAG];
-    return ((flag & 0x40) != 0) && ((flag & 0x03) != 0);
+    const float width = ctx.sensors[SensorMap::NICLA_W_VALUE];
+    return ((flag & 0x40) != 0) && ((flag & 0x03) != 0) &&
+           isfinite(width) && width > 0.0f;
+}
+
+bool BalloonMission::resumeFromManual(AppContext& ctx,uint32_t pausedMs){
+    if(state_==DONE || visited_>=targetCount_)return false;
+    missionStartMs_+=pausedMs;
+    const bool routeTurn=state_==TURN_TO_NEXT || state_==ACQUIRE_NEXT;
+    closeFrames_=0;advanceGate_.reset();impulse_.cancel(millis());
+    // Keep courseYaw_, visited_, track_ and routeYawRef_. Rebuild transient
+    // controllers at the operator's new pose rather than using old integrals.
+    enter(ctx,routeTurn?TURN_TO_NEXT:(detected(ctx)?APPROACH:SEARCH));
+    return true;
+}
+
+bool BalloonMission::manualWaypointClear(AppContext& ctx){
+    if(visited_>=targetCount_ || state_==DONE)return false;
+    const float w=ctx.sensors[SensorMap::NICLA_W_VALUE],h=ctx.sensors[SensorMap::NICLA_H_VALUE];
+    const float area=isfinite(w)&&isfinite(h)&&w>0&&h>0?w*h:0;
+    // Manual acknowledgement supplies progress, not an optical contact or
+    // distance measurement. Keep a conservative next-target size heuristic.
+    lastVisitedArea_=fmaxf(area,N03_VISIT_WIDTH_PX*N03_VISIT_WIDTH_PX);
+    ++visited_;closeFrames_=0;advanceGate_.reset();impulse_.cancel(millis());
+    if(stopAfterVisit_ || visited_>=targetCount_)enter(ctx,DONE);
+    else{
+        routeYawRef_=wrapPi(courseYaw_+BalloonCourse::heading(track_,visited_-1));
+        enter(ctx,TURN_TO_NEXT);
+    }
+    Serial.printf("[COURSE] waypoint_cleared=%d manual=1\n",visited_);
+    return true;
+}
+
+void BalloonMission::reportPaused(AppContext& ctx,uint32_t pausedAt){
+    Telemetry::sendMission(ctx,int(state_),visited_,targetCount_,searchHeight_,visitScore(ctx),
+        uint32_t(pausedAt-missionStartMs_)/1000.f);
 }
 
 float BalloonMission::visitScore(const AppContext& ctx) const {
-    return ctx.sensors[SensorMap::NICLA_W];
+    return ctx.sensors[SensorMap::NICLA_W_VALUE];
 }
 
 void BalloonMission::enter(AppContext& ctx, State s) {
+    advanceGate_.reset();
+    largeTargetRejected_ = false;
     state_ = s;
     stateStartMs_ = millis();
 
@@ -562,32 +674,461 @@ void BalloonMission::enter(AppContext& ctx, State s) {
 
     if (s == SEARCH) {
         closeFrames_ = 0;
-        lostFrames_ = 0;
         lastSearchYaw_ = yawNow;
         searchYawAccum_ = 0.0f;
         searchInitialized_ = true;
         resetMissionYaw(yawNow);
+        initialSearch_.reset(yawNow);
+        initialHeartbeat_=initialReset_=millis();
+        approachMixer_.reset(true);
+        ControlCommon::resetYawState(approachYaw_,yawNow);
+        approachUs_=micros();
     }
     else if (s == APPROACH) {
         resetMissionYaw(yawNow);
+        approachBase_=AdaptiveLift::START_TRIM;
+        approachSupport_.reset(approachBase_,millis(),AdaptiveLift::HARD_MAX);
+        approachBearing_=VisualBearing();
+        approachMixer_.reset(true);
+        ControlCommon::resetYawState(approachYaw_,yawNow);
+        approachUs_=micros();approachHadFull_=false;approachNearMemory_=false;
+        approachAssociationEpoch_=uint8_t(ctx.robot->sensorsuite.niclaFeedback().sample>>8);
+        impulse_.reset();
+        approachMemory_.reset();
+        approachReacquiring_=false;approachLastReset_=0;approachHeartbeat_=millis();
+        approachGeneration_=ctx.robot->sensorsuite.niclaFeedback().generation-1U;
     }
     else if (s == VISIT_CONFIRM) {
         closeFrames_ = 0;
         resetMissionYaw(yawNow);
     }
-    else if (s == WAIT_TARGET_LOST) {
-        lostFrames_ = 0;
+    else if (s == TURN_TO_NEXT || s == ACQUIRE_NEXT) {
+        // Barometer is only a short-term bridge while the next balloon is unseen.
+        const float heightNow = ctx.sensors[SensorMap::ALTITUDE];
+        if (isfinite(heightNow)) visualHeightAnchor_ = searchHeight_ = heightNow;
+        yawRef_ = routeYawRef_;
+        turnSettled_ = false;
         resetMissionYaw(yawNow);
     }
 }
 
+void BalloonMission::holdRouteYaw(AppContext& ctx, float altitudeDemand, float maxPower,
+                                 float minPower, float altitudeMax, float& servo1,
+                                 float& servo2, float& motorPower) {
+    const unsigned long nowUs = micros();
+    float dt = (nowUs - missionYawLastUs) * 1.0e-6f;
+    missionYawLastUs = nowUs;
+    if (!isfinite(dt) || dt <= 0 || dt > 0.20f) dt = 0.01f;
+    const float yaw = ctx.sensors[SensorMap::YAW];
+    const float rate = ControlCommon::updateYawRate(
+        missionYaw, yaw, ctx.sensors[SensorMap::YAW_RATE], dt);
+    auto limits = ControlCommon::defaultYawLimits();
+    limits.maxPower = maxPower;
+    limits.minPower = minPower;
+    limits.deadbandRad = TURN_TOLERANCE_RAD;
+    ControlCommon::YawGains gains;
+    gains.kp = ControlCommon::DEF_YAW_KP;
+    gains.kd = ControlCommon::DEF_YAW_KD;
+    gains.ki = limits.ki;
+    const float command = ControlCommon::computeYawCommand(
+        gains, limits, missionYaw, wrapPi(yawRef_ - yaw), rate, dt);
+    float etaZ, etaYaw, blend;
+    ControlCommon::mixOutputs(altitudeDemand, command, limits, fmaxf(altitudeMax, maxPower),
+                             servo1, servo2, motorPower, etaZ, etaYaw, blend);
+}
+
+void BalloonMission::reportDecision(AppContext& ctx, int reason, float forwardRequest) {
+    // Acquisition blockers are evaluated from the same conditions as control,
+    // even between camera samples. Do not infer them in the dashboard.
+    if (state_ == ACQUIRE_NEXT && reason != 15) {
+        const auto& feedback = ctx.robot->sensorsuite.niclaFeedback();
+        const float yawNow = ctx.sensors[SensorMap::YAW];
+        if (largeTargetRejected_ && uint32_t(millis() - largeTargetRejectedMs_) < 1500) reason = 13;
+        else if (!feedback.fresh || feedback.resetPending) reason = 14;
+        else if (isfinite(yawNow) && fabsf(wrapPi(yawRef_ - yawNow)) > TURN_TOLERANCE_RAD) reason = 11;
+        else if (!detected(ctx)) reason = 4;
+        else if (feedback.protocol == NiclaFeedback::N03_PROTOCOL && feedback.state != NiclaFeedback::FULL) reason = 12;
+        else {
+            const float area = ctx.sensors[SensorMap::NICLA_W_VALUE] * ctx.sensors[SensorMap::NICLA_H_VALUE];
+            reason = BalloonCourse::smallerNextTarget(area, lastVisitedArea_) ? 4 : 13;
+        }
+    }
+    const float yaw = ctx.sensors[SensorMap::YAW];
+    const float error = isfinite(yaw) && isfinite(yawRef_)
+        ? wrapPi(yawRef_ - yaw) * ControlCommon::RAD2DEG : NAN;
+    Telemetry::sendMissionDecision(ctx, reason, forwardRequest, error,
+        state_ == DONE ? 0 : BalloonCourse::waypoint(track_, visited_),
+        float(advanceGate_.stableMs(millis())), ctx.mode == AppConfig::P12_VISION_BENCH);
+}
+
+void BalloonMission::updateN03Search(AppContext& ctx) {
+    const uint32_t now=millis(),us=micros();
+    float dt=uint32_t(us-approachUs_)*1.e-6f;approachUs_=us;
+    if(!isfinite(dt)||dt<=0||dt>.2f)dt=.01f;
+    const auto& feedback=ctx.robot->sensorsuite.niclaFeedback();
+    const auto vertical=verticalObservation(ctx);
+    const float yaw=ctx.sensors[SensorMap::YAW],rate=ctx.sensors[SensorMap::YAW_RATE];
+    const bool armed=ctx.robot->actuatorsAreArmed();
+    const float maxPower=getN03PowerCeiling(ctx);
+    const float motorFloor=fminf(.10f,maxPower);
+    const float supportLimit=maxPower*fminf(1.f,approachMixer_.etaZ);
+    const float supportFloor=0.f; // hover may require less than a fixed6% lift command
+    ctx.robot->PDterms.yawEn=false;ctx.robot->PDterms.zEn=false;
+    if(feedback.fresh)initialHeartbeat_=now;
+    const bool badLink=uint32_t(now-initialHeartbeat_)>=1500;
+    if(armed && (badLink || !isfinite(yaw) || !isfinite(rate) || (vertical.independent && !vertical.healthy)))initialSearch_.failed=true;
+    if(armed && !initialSearch_.failed && !feedback.resetPending && detected(ctx)){
+        // Nicla already confirmed FULL/PARTIAL across multiple camera frames.
+        // Stop scanning immediately. Transfer the slewed motor/servo commands
+        // and learned support rather than restarting at15% or zero thrust.
+        const auto mixer=approachMixer_;
+        const auto yawState=approachYaw_;
+        const float base=initialSearch_.started?initialSearch_.trim:AdaptiveLift::START_TRIM;
+        enter(ctx,APPROACH);
+        approachBase_=base;approachSupport_.reset(base,now,AdaptiveLift::HARD_MAX);
+        approachMixer_=mixer;approachYaw_=yawState;
+        updateN03Approach(ctx);return;
+    }
+    const bool confirming=feedback.fresh && feedback.state==NiclaFeedback::CONFIRM;
+    initialSearch_.inertia.learningAllowed=!ctx.flowHeight.holding;
+    initialSearch_.update(now,armed,vertical.height,
+        vertical.vz,vertical.healthy,
+        supportLimit,supportFloor,confirming,vertical.sampleUs,vertical.rangeVelocity);
+    float yawCommand=0;
+    if(initialSearch_.failed){
+        initialSearch_.demand=0;
+        enter(ctx,TURN_FAILED);
+        applyPhysicalCommand(ctx,approachMixer_.servo1,approachMixer_.servo2,0,0);
+        ctx.robot->setActuatorsArmed(false);
+    }else if(!armed){
+        applyPhysicalCommand(ctx,SupportYaw::VISUAL_BASE1_DEG,SupportYaw::VISUAL_BASE2_DEG,0,0);
+    }else{
+        yawRef_=confirming?yaw:initialSearch_.yawReference;
+        const float yawRate=ControlCommon::updateYawRate(approachYaw_,yaw,rate,dt);
+        ControlCommon::YawGains gains;gains.kp=.35f;gains.ki=.08f;gains.kd=3.f;
+        auto limits=ControlCommon::defaultYawLimits();limits.authority=.25f;
+        limits.deadbandRad=ControlCommon::DEG2RAD;
+        yawCommand=SupportYaw::command(gains,limits,approachYaw_,wrapPi(yawRef_-yaw),yawRate,dt);
+        approachMixer_.update(initialSearch_.demand,yawCommand,.25f,0,maxPower,
+            dt,fminf(motorFloor,initialSearch_.inertia.motorFloor),0,0,true);
+        applyPhysicalCommand(ctx,approachMixer_.servo1,approachMixer_.servo2,
+            approachMixer_.power,approachMixer_.power);
+        if(feedback.fresh && !feedback.resetPending && feedback.state==NiclaFeedback::LOST &&
+           uint32_t(now-initialReset_)>=3000){
+            ctx.robot->sensorsuite.resetNiclaTarget();initialReset_=now;
+        }
+    }
+    reportDecision(ctx,initialSearch_.failed?10:4,0);
+    Telemetry::sendVisualSupport(ctx,-1,0,initialSearch_.trim,initialSearch_.demand,yawCommand,
+        initialSearch_.failed?VisualSupport::FAULT:(armed?5:VisualSupport::DISARMED));
+    Telemetry::sendVisualBearing(ctx,-1,yawRef_,wrapPi(yawRef_-yaw),false,VisualBearing::VERSION,0);
+    Telemetry::sendImpulse(ctx,5,initialSearch_.started?float(uint32_t(now-initialSearch_.since)):0,
+        0,yawCommand,0,float(VisualSearch::TIMEOUT_MS));
+    const auto& motion=initialSearch_.inertia;
+    const int flags=ctx.robot->actuatorsAreArmed()?((motion.velocityTrusted?1:0)|(motion.brakingUp?4:0)|(motion.brakingDown?8:0)|
+        (motion.evidence.trusted?64:0)|(motion.visualCorroborated?128:0)|(motion.evidence.fastTrusted?256:0)):0;
+    Telemetry::sendInertia(ctx,motion.rate,motion.predictedRate,motion.desiredRate,motion.motorFloor,flags,motion.velocityConfidence);
+    Telemetry::sendControl(ctx,yawRef_,searchHeight_,0);
+    Telemetry::sendMission(ctx,int(state_),visited_,targetCount_,searchHeight_,0,
+        uint32_t(now-missionStartMs_)/1000.f);
+}
+
+void BalloonMission::updateN03Approach(AppContext& ctx) {
+    const uint32_t now=millis(),us=micros();
+    float dt=uint32_t(us-approachUs_)*1.e-6f;approachUs_=us;
+    if(!isfinite(dt)||dt<=0||dt>.2f)dt=.01f;
+    const auto& feedback=ctx.robot->sensorsuite.niclaFeedback();
+    const auto vertical=verticalObservation(ctx);
+    const float yaw=ctx.sensors[SensorMap::YAW],rate=ctx.sensors[SensorMap::YAW_RATE];
+    const float score=visitScore(ctx);
+    const float maxPower=getN03PowerCeiling(ctx);
+    const float motorFloor=fminf(.10f,maxPower);
+    const float supportLimit=maxPower*fminf(1.f,approachMixer_.etaZ);
+    const float supportFloor=0.f; // visual overshoot must be able to unload lift to ESC idle
+    // Nicla7 can recognise again after any duration. A fresh association is
+    // not automatically the old mission waypoint: retain world references,
+    // stop advancing, and require a FULL within the expected bearing gate.
+    const uint8_t associationEpoch=uint8_t(feedback.sample>>8);
+    if(feedback.fresh && associationEpoch!=approachAssociationEpoch_){
+        approachAssociationEpoch_=associationEpoch;approachReacquiring_=true;
+        approachHadFull_=false;approachNearMemory_=false;
+        approachMemory_.reset();
+        advanceGate_.reset();impulse_.cancel(now);closeFrames_=0;
+        if(state_==VISIT_CONFIRM){state_=APPROACH;stateStartMs_=now;}
+    }
+    VisualSupport::Observation o;
+    o.fresh=feedback.fresh && !feedback.resetPending;
+    o.confirmed=detected(ctx);o.full=feedback.state==NiclaFeedback::FULL;
+    o.x=ctx.sensors[SensorMap::NICLA_X_VALUE];o.y=ctx.sensors[SensorMap::NICLA_Y_VALUE];
+    o.w=ctx.sensors[SensorMap::NICLA_W_VALUE];o.h=ctx.sensors[SensorMap::NICLA_H_VALUE];
+    o.near=approachHadFull_ && feedback.state==NiclaFeedback::PARTIAL &&
+        (o.w>=120.f || o.h>=112.f); // large crop, not every distant partial
+    // N03 sends measured blob bounds in ROI channels. Keep them separate
+    // from the true pixel centroid, which may shift inside a clipped patch.
+    if(ctx.sensors[SensorMap::NICLA_W]==o.w && ctx.sensors[SensorMap::NICLA_H]==o.h){
+        o.left=ctx.sensors[SensorMap::NICLA_X];o.top=ctx.sensors[SensorMap::NICLA_Y];
+    }
+    o.generation=feedback.generation;
+    bool rejectReacquisition=false;
+    // After a tracker restart retain the old world bearing. Do not jump to a
+    // candidate far from the missing waypoint just because it is confirmed.
+    if(approachReacquiring_ && o.valid() && approachBearing_.ready){
+        const float candidate=wrapPi(yaw-(o.x-120.f)/240.f*(70.f*ControlCommon::DEG2RAD));
+        rejectReacquisition=!o.full || !isfinite(candidate) ||
+            fabsf(wrapPi(candidate-approachBearing_.reference))>20.f*ControlCommon::DEG2RAD;
+        if(rejectReacquisition)o.confirmed=false;
+        else approachReacquiring_=false;
+    }
+    // New camera keeps searching autonomously. R is only a legacy LOST rescue
+    // or a request to release a rejected association, not a recovery deadline.
+    if(ctx.robot->actuatorsAreArmed() && !approachNearMemory_ && approachSupport_.seen &&
+       uint32_t(now-approachSupport_.lastSeen)>=5200 && feedback.fresh && !feedback.resetPending &&
+       uint32_t(now-approachLastReset_)>=3000 &&
+       (feedback.state==NiclaFeedback::LOST || rejectReacquisition)){
+        approachReacquiring_=true;approachLastReset_=now;
+        approachHadFull_=false; // an explicit tracker reset loses association proof
+        ctx.robot->sensorsuite.resetNiclaTarget();
+        o.fresh=false;o.confirmed=false;
+    }
+    const bool newSample=o.valid() && o.generation!=approachGeneration_;
+    float forward=0;
+    float appliedYaw=0;
+    int decision=6;
+    bool headingLimited=false;
+    bool estimatedContinuation=false;
+    if(!ctx.robot->actuatorsAreArmed()){
+        impulse_.reset();
+        closeFrames_=0;advanceGate_.reset();
+        applyPhysicalCommand(ctx,SupportYaw::VISUAL_BASE1_DEG,SupportYaw::VISUAL_BASE2_DEG,0,0);
+    }else{
+        ctx.robot->PDterms.yawEn=false;ctx.robot->PDterms.zEn=false;
+        const auto heightOptions=MissionHeightOptions::decode(ctx.command.params[AppConfig::PARAM_AUX4]);
+        if(approachSupport_.independentVelocity!=vertical.rangeVelocity){
+            approachSupport_.inertia.evidence.reset();approachSupport_.inertia.rateReady=false;
+        }
+        approachSupport_.selectIndependentHeight(vertical.independent,now);
+        approachSupport_.independentVelocity=vertical.rangeVelocity;
+        approachSupport_.fixedMode=true;
+        approachSupport_.runReleased=heightOptions.valid && heightOptions.released;
+        approachSupport_.advanceEnabled=heightOptions.valid && heightOptions.advance;
+        approachSupport_.offsetRequest=heightOptions.offset;
+        approachSupport_.levelPitch=heightOptions.levelPitch;
+        if(!heightOptions.valid || (vertical.independent && !vertical.healthy))approachSupport_.stop();
+        approachSupport_.inertia.learningAllowed=!impulse_.neutralOnly() && !ctx.flowHeight.holding;
+        approachSupport_.update(o,now,approachBase_,supportLimit,false,supportFloor,
+            vertical.height,vertical.vz,
+            vertical.healthy,ctx.sensors[SensorMap::PITCH],
+            N03_APPROACH_TIMEOUT_MS,true,N03_RECOVERY_MS,vertical.sampleUs,rate);
+        // Visual occlusion is different from loss of camera communication.
+        if(feedback.fresh)approachHeartbeat_=now;
+        if(uint32_t(now-approachHeartbeat_)>=1500)approachSupport_.stop();
+        if(!isfinite(yaw)||!isfinite(rate))approachSupport_.stop();
+        if(approachSupport_.failed){
+            impulse_.reset();
+            enter(ctx,TURN_FAILED);decision=10;
+            applyPhysicalCommand(ctx,approachMixer_.servo1,approachMixer_.servo2,0,0);
+            ctx.robot->setActuatorsArmed(false);
+        }else{
+            if(newSample){
+                approachGeneration_=o.generation;
+                if(o.near)approachBearing_.updateNear(o.boxLeft(),o.w,now);
+                else approachBearing_.update(yaw,o.x,now);
+                approachHadFull_=approachHadFull_||o.full;
+                if(o.full && (o.w>=80 || o.h>=64))approachNearMemory_=true;
+                else if(o.full && o.w<60 && o.h<48)approachNearMemory_=false;
+                visualHeightSeen_=true;visualHeightLastSeenMs_=now;
+                approachMemory_.observe(now,associationEpoch,vertical.height,
+                    vertical.healthy);
+            }
+            const bool recentPulse=impulse_.phase==ImpulseApproach::PUSH && approachMemory_.ready &&
+                uint32_t(now-approachMemory_.lastSeen)<=ApproachProfile::OCCLUSION_MS;
+            yawRef_=approachBearing_.ready ? wrapPi(approachBearing_.reference+
+                (recentPulse?0.f:approachSupport_.recoveryYawOffset(now))) : yaw;
+            recoveryYaw_=approachBearing_.ready?approachBearing_.reference:yaw;
+            if(approachSupport_.altitudeReady)
+                visualHeightAnchor_=searchHeight_=approachSupport_.fixedTarget();
+            visualHeight_=approachSupport_.height;
+            missionAlt.integral=approachSupport_.height.trim;
+            const float yawError=wrapPi(yawRef_-yaw);
+            const float yawRate=ControlCommon::updateYawRate(approachYaw_,yaw,rate,dt);
+            ControlCommon::YawGains gains;gains.kp=N03_APPROACH_YAW_KP;gains.ki=.08f;gains.kd=3.f;
+            auto limits=ControlCommon::defaultYawLimits();limits.authority=.25f;
+            limits.deadbandRad=ControlCommon::DEG2RAD;
+            const bool tracking=approachSupport_.phase==VisualSupport::RUN && o.valid();
+            const float currentHeight=vertical.height;
+            const bool nearHeight=approachSupport_.altitudeReady && vertical.healthy && isfinite(currentHeight) &&
+                fabsf(approachSupport_.estimatedHeight(currentHeight,now)-approachSupport_.fixedTarget())<=.20f;
+            const bool nearCentred=nearHeight && o.coversCentre() && fabsf(yawError)<=8.f*ControlCommon::DEG2RAD &&
+                fabsf(yawRate)<=.12f;
+            const bool centered=tracking && (o.near?nearCentred:
+                (fabsf(o.x-120.f)<=24 && fabsf(o.y-80.f)<=24));
+            const bool heightPermission=approachSupport_.runReleased && approachSupport_.advanceEnabled &&
+                approachSupport_.fixedControlReady(now) && !ctx.flowHeight.holding;
+            const bool close=heightPermission && N03_VISIT_WIDTH_PX>0 && approachHadFull_ && centered && score>=N03_VISIT_WIDTH_PX;
+            if(state_==APPROACH && close){enter(ctx,VISIT_CONFIRM);decision=8;}
+            else if(state_==VISIT_CONFIRM){
+                decision=8;
+                if(close){
+                    if(newSample)++closeFrames_;
+                    if(closeFrames_>=CLOSE_FRAMES_REQUIRED && uint32_t(now-stateStartMs_)>=500){
+                        ++visited_;lastVisitedArea_=o.w*o.h;
+                        Serial.printf("[COURSE] waypoint_cleared=%d width=%.1f estimated=1\n",visited_,score);
+                        if(stopAfterVisit_||visited_>=targetCount_)enter(ctx,DONE);
+                        else{
+                            routeYawRef_=wrapPi(courseYaw_+BalloonCourse::heading(track_,visited_-1));
+                            enter(ctx,TURN_TO_NEXT);
+                        }
+                    }
+                }else{
+                    closeFrames_=0;
+                    // Keep the recovery timer/controller when returning from
+                    // VISIT_CONFIRM: enter(APPROACH) would reset lost history.
+                    state_=APPROACH;stateStartMs_=now;advanceGate_.reset();
+                }
+            }
+            const bool neutralReady=fabsf(approachMixer_.servo1-SupportYaw::VISUAL_BASE1_DEG)<=.5f &&
+                fabsf(approachMixer_.servo2-SupportYaw::VISUAL_BASE2_DEG)<=.5f;
+            if(state_==APPROACH){
+                // N03 PARTIAL is an already confirmed track, not a rejected
+                // candidate. Requiring a historical FULL here deadlocked
+                // close starts for the entire flight003101. Keep the same
+                // fresh-observation/alignment gates; FULL remains an arrival
+                // calibration condition, independent of forward permission.
+                // Receding short horizon: do not demand perfect alignment
+                // throughout the whole pulse before allowing any movement.
+                const float horizon=fminf(ApproachProfile::FORECAST_S,impulse_.headingHorizon(now));
+                const bool headingAligned=ImpulseApproach::headingFits(yawError,yawRate,
+                    horizon,ApproachProfile::ENTRY_YAW_DEG*ControlCommon::DEG2RAD);
+                const bool headingSafe=ImpulseApproach::headingFits(yawError,yawRate,
+                    horizon,ApproachProfile::CONTINUE_YAW_DEG*ControlCommon::DEG2RAD);
+                headingLimited=tracking && !headingSafe;
+                const bool advanceHeight=approachSupport_.altitudeReady && vertical.healthy && isfinite(currentHeight) &&
+                    fabsf(approachSupport_.estimatedHeight(currentHeight,now)-approachSupport_.fixedTarget())<=ApproachProfile::ADVANCE_HEIGHT_M;
+                const bool aligned=heightPermission && advanceHeight && tracking && headingAligned &&
+                    (o.near?(advanceHeight && o.coversCentre()):
+                     (fabsf(o.x-120.f)<=ApproachProfile::ENTRY_X_PX && fabsf(o.y-80.f)<=ApproachProfile::ENTRY_Y_PX)) &&
+                    fabsf(yawRate)<=ApproachProfile::ENTRY_RATE;
+                const bool visibleSafe=tracking &&
+                    (o.near?(advanceHeight && o.coversCentre()):
+                     (fabsf(o.x-120.f)<=ApproachProfile::CONTINUE_X_PX && fabsf(o.y-80.f)<=ApproachProfile::CONTINUE_Y_PX));
+                // Only finish an ALREADY ACTIVE pulse on short visual loss.
+                // World bearing stays in approachBearing_; height is checked
+                // against its last real observation. Never fabricate FULL or
+                // arrival from the remembered geometry or a raw candidate.
+                estimatedContinuation=!tracking && impulse_.phase==ImpulseApproach::PUSH &&
+                    !approachReacquiring_ && approachBearing_.ready &&
+                    approachMemory_.canContinue(now,associationEpoch,o.fresh,
+                        feedback.state==NiclaFeedback::AMBIG,currentHeight,
+                        vertical.healthy,
+                        vertical.vz);
+                const bool safe=heightPermission && advanceHeight && (visibleSafe || estimatedContinuation) && headingSafe &&
+                    fabsf(yawRate)<=ApproachProfile::CONTINUE_RATE;
+                // Height keeps regulating during the pulse. Do not require
+                // perfect vertical centring before any forward motion exists.
+                const bool ready=impulse_.phase==ImpulseApproach::ALIGN &&
+                    advanceGate_.update(now,aligned,newSample,
+                        ApproachProfile::REQUIRED_SAMPLES,ApproachProfile::CONFIRM_MS);
+                impulse_.update(now,ready,safe,neutralReady);
+                if(impulse_.phase!=ImpulseApproach::ALIGN)advanceGate_.reset();
+                if(impulse_.phase==ImpulseApproach::PUSH){forward=ApproachProfile::FORWARD;decision=7;}
+                else decision=tracking?(fabsf(o.x-120.f)>24?5:6):4;
+            }else impulse_.cancel(now);
+            const float yawCommand=SupportYaw::command(gains,limits,approachYaw_,
+                yawError,yawRate,dt,tracking && !impulse_.neutralOnly());
+            // Separate impulse from yaw corrections, including the time to
+            // return fore/aft tilt. Height feedback remains active throughout.
+            appliedYaw=impulse_.neutralOnly()?0.f:yawCommand;
+            if(state_==DONE){
+                forward=0;decision=9;
+                applyPhysicalCommand(ctx,approachMixer_.servo1,approachMixer_.servo2,0,0);
+                ctx.robot->setActuatorsArmed(false);
+            }else{
+                const bool coastUp=approachSupport_.inertia.brakingUp && impulse_.neutralOnly();
+                const float runningFloor=fminf(motorFloor,approachSupport_.inertia.motorFloor);
+                approachMixer_.update(approachSupport_.demand,appliedYaw,.25f,0,maxPower,dt,
+                    runningFloor,0,forward,true,ApproachProfile::TILT_DEG,!coastUp,ApproachProfile::FORWARD_SIGN);
+                applyPhysicalCommand(ctx,approachMixer_.servo1,approachMixer_.servo2,
+                    approachMixer_.power,approachMixer_.power);
+            }
+        }
+    }
+    reportDecision(ctx,decision,forward);
+    Telemetry::sendVisualSupport(ctx,approachSupport_.lastY,
+        approachSupport_.seen && !o.near?(80.f-approachSupport_.lastY)/80.f:0.f,
+        approachSupport_.height.trim,approachSupport_.demand,appliedYaw,
+        ctx.robot->actuatorsAreArmed()?approachSupport_.phase:VisualSupport::DISARMED);
+    Telemetry::sendVisualBearing(ctx,approachBearing_.lastX,yawRef_,
+        isfinite(yaw)?wrapPi(yawRef_-yaw):0,
+        ctx.robot->actuatorsAreArmed() && approachBearing_.ready && !approachSupport_.failed,
+        VisualBearing::VERSION,forward);
+    Telemetry::sendImpulse(ctx,int(impulse_.phase),float(impulse_.elapsed(now)),
+        forward,appliedYaw,float(impulse_.pulses),float(ImpulseApproach::PUSH_MS));
+    const auto& motion=approachSupport_.inertia;
+    const bool live=ctx.robot->actuatorsAreArmed();
+    const int inertiaFlags=live?((motion.velocityTrusted?1:0) |
+        ((motion.brakingUp && impulse_.neutralOnly())?2:0) |
+        (motion.brakingUp?4:0) | (motion.brakingDown?8:0) | (motion.visualAbove?16:0) |
+        (headingLimited?32:0) | (motion.evidence.trusted?64:0) | (motion.visualCorroborated?128:0) | (motion.evidence.fastTrusted?256:0) | (o.near?512:0) | (estimatedContinuation && forward>0?1024:0)):0;
+    Telemetry::sendInertia(ctx,motion.rate,motion.predictedRate,motion.desiredRate,
+        motion.motorFloor,inertiaFlags,motion.velocityConfidence);
+    Telemetry::sendFixedHeight(ctx,approachSupport_.fixedTarget(),
+        approachSupport_.estimatedHeight(vertical.height,now),
+        approachSupport_.pressureBias(now),approachSupport_.appliedOffset,
+        approachSupport_.fixedFlags(now),approachSupport_.levelPitch*ControlCommon::RAD2DEG);
+    Telemetry::sendHeightReference(ctx,approachSupport_.referenceForControl(now),
+        approachSupport_.referenceError(vertical.height,now),
+        approachSupport_.altitudeReady?float(uint32_t(now-approachSupport_.referenceUpdatedAt)):-1.f,
+        approachSupport_.independentHeight?0.f:approachSupport_.altitudeAid.rate(now),approachSupport_.altitudeAid.noiseBand,
+        approachSupport_.referenceFlags(now));
+    Telemetry::sendControl(ctx,yawRef_,searchHeight_,forward);
+    Telemetry::sendMission(ctx,int(state_),visited_,targetCount_,searchHeight_,score,
+        uint32_t(now-missionStartMs_)/1000.f);
+}
+
 void BalloonMission::update(AppContext& ctx) {
     if (!ctx.robot) return;
+    const bool visionBench = ctx.mode == AppConfig::P12_VISION_BENCH;
+    if (visionBench && ctx.robot->actuatorsAreArmed()) ctx.robot->setActuatorsArmed(false);
+    const auto& feedback = ctx.robot->sensorsuite.niclaFeedback();
+    const bool n03 = feedback.protocol == NiclaFeedback::N03_PROTOCOL;
+    const bool newVisionSample = feedback.fresh && feedback.generation != lastVisionGeneration_;
+    lastVisionGeneration_ = feedback.generation;
+    const bool visitCalibrated = !n03 || N03_VISIT_WIDTH_PX > 0;
+    const float visitThreshold = n03 ? N03_VISIT_WIDTH_PX : VISIT_SCORE_THRESHOLD;
 
     const float yaw = ctx.sensors[SensorMap::YAW];
-    const float x = ctx.sensors[SensorMap::NICLA_X];
-    const bool see = detected(ctx);
+    const float x = ctx.sensors[SensorMap::NICLA_X_VALUE];
+    const float y = ctx.sensors[SensorMap::NICLA_Y_VALUE];
+    bool see = detected(ctx);
     const float score = visitScore(ctx);
+
+    // First validate one complete waypoint in P08/P09, through arrival.
+    // Multi-waypoint turn/transition mixing is a separate pending integration.
+    // P12 remains disarmed and keeps its current simulation path.
+    if(n03 && !visionBench && targetCount_==1 && state_==SEARCH){
+        updateN03Search(ctx);return;
+    }
+    if(n03 && !visionBench && targetCount_==1 && (state_==APPROACH || state_==VISIT_CONFIRM)){
+        updateN03Approach(ctx);return;
+    }
+    // Legacy multi-waypoint paths also must not silently inherit a different
+    // camera association as the current waypoint. Planned TURN/ACQUIRE_NEXT
+    // remain responsible for selecting the NEXT waypoint.
+    if(n03 && !visionBench && targetCount_!=1 && (state_==APPROACH || state_==VISIT_CONFIRM)){
+        const uint8_t epoch=uint8_t(feedback.sample>>8);
+        if(feedback.fresh && epoch!=approachAssociationEpoch_){
+            approachAssociationEpoch_=epoch;approachReacquiring_=true;
+            advanceGate_.reset();closeFrames_=0;
+            if(state_==VISIT_CONFIRM){state_=APPROACH;stateStartMs_=millis();}
+        }
+        if(approachReacquiring_ && see){
+            const float candidate=wrapPi(yaw-(x-120.f)/240.f*(70.f*ControlCommon::DEG2RAD));
+            if(feedback.state==NiclaFeedback::FULL && visualHeightSeen_ && isfinite(candidate) &&
+               fabsf(wrapPi(candidate-recoveryYaw_))<=20.f*ControlCommon::DEG2RAD)
+                approachReacquiring_=false;
+            else see=false;
+        }
+    }
 
     // Esta mision usa comandos fisicos directos ya validados.
     // No se usa el mixer heredado para evitar conflictos con los nuevos
@@ -603,6 +1144,8 @@ void BalloonMission::update(AppContext& ctx) {
     float servo2Deg = SERVO2_Z_DEG;
     float motorPower = 0.0f;
     float diagnosticFx = 0.0f;
+    int decisionReason = 0;
+    float forwardRequest = 0.0f;
 
     // Solo el avance en APPROACH usa potencias independientes por motor
     // (ver ControlCommon::computeThrustAllocation). El resto de los estados
@@ -612,7 +1155,7 @@ void BalloonMission::update(AppContext& ctx) {
     float motor2Power = 0.0f;
     bool independentMotors = false;
 
-    // Para SEARCH/WAIT_TARGET_LOST:
+    // Para SEARCH:
     // P08/P09 conservan 20%; P10/P11 toman --vis-max-power.
     const float searchTurnPower = visualCfg.maxPower;
 
@@ -643,19 +1186,101 @@ void BalloonMission::update(AppContext& ctx) {
     // ecuaciones (9)-(10): las dos realimentaciones se FUSIONAN en una sola
     // fuerza deseada, no se alternan.
     float altitudeDemand = 0.0f;
-    if (isfinite(searchHeight_) && isfinite(height) && isfinite(verticalVelocity)) {
+    const bool visualTracking = see && (state_ == APPROACH || state_ == VISIT_CONFIRM ||
+        (state_ == SEARCH && visited_ == 0));
+    if (visualTracking && newVisionSample) {
+        visualHeight_.update(millis(), y, ctx.sensors[SensorMap::NICLA_H_VALUE],
+            altitudeCfg.maxPower, !n03 || feedback.state == NiclaFeedback::FULL);
+        visualHeightSeen_ = true;
+        visualHeightLastSeenMs_ = millis();
+        recoveryYaw_ = isfinite(missionYawRef) && missionYawRefValid ? missionYawRef : yaw;
+        if (isfinite(height)) visualHeightAnchor_ = searchHeight_ = height;
+        // Transfer the visual support trim to the temporary barometric bridge.
+        missionAlt.integral = visualHeight_.trim;
+    }
+    if (!visionBench && visualTracking) {
+        const uint32_t nowUs = micros();
+        const float dt = fminf(.05f, uint32_t(nowUs-visualHeightLastUs_)*1.e-6f);
+        visualHeightLastUs_ = nowUs;
+        visualHeightPower_ = ControlCommon::rateLimit(visualHeight_.demand,
+            visualHeightPower_, altitudeCfg.slewPerSec, dt);
+        altitudeDemand = constrain(visualHeightPower_, 0.f, altitudeCfg.maxPower);
+        missionAlt.lastPower = altitudeDemand;
+    } else if (!visionBench && isfinite(searchHeight_) && isfinite(height) && isfinite(verticalVelocity)) {
         altitudeDemand = calculateAltitudePower(
             searchHeight_, height, verticalVelocity, altitudeCfg);
+        visualHeightPower_ = altitudeDemand;
+        visualHeightLastUs_ = micros();
     }
 
     const bool altitudeControlEnabled =
+        !visionBench &&
         isfinite(searchHeight_) &&
         isfinite(height) &&
         isfinite(verticalVelocity);
 
+    // Lost target: no forward thrust, keep last bearing briefly, then scan
+    // +/-12deg and +/-20cm around the last observation, at most ten seconds.
+    // This is NOT position hold: horizontal drift cannot be measured here.
+    if (visualHeightSeen_ && !visualTracking &&
+        (state_ == APPROACH || state_ == VISIT_CONFIRM || state_ == ACQUIRE_NEXT)) {
+        const uint32_t missingMs = (state_ == ACQUIRE_NEXT)
+            ? uint32_t(millis()-stateStartMs_) : uint32_t(millis()-visualHeightLastSeenMs_);
+        advanceGate_.reset(); closeFrames_ = 0; turnSettled_ = false;
+        if (state_ == VISIT_CONFIRM) stateStartMs_ = millis();
+        if (missingMs >= 10000 || !isfinite(yaw) || (!visionBench && !altitudeControlEnabled)) {
+            enter(ctx, TURN_FAILED); // Existing terminal safe state; reset required.
+            applyPhysicalCommand(ctx, SERVO1_Z_DEG, SERVO2_Z_DEG, 0, 0);
+            ctx.robot->setActuatorsArmed(false);
+            reportDecision(ctx, 10, 0);
+            return;
+        }
+        const float offset = missingMs<700 ? 0 : VisualHeight::searchOffset(missingMs-700);
+        searchHeight_ = visualHeightAnchor_ + offset;
+        if (!visionBench) altitudeDemand=calculateAltitudePower(searchHeight_,height,verticalVelocity,altitudeCfg);
+        if (state_ != ACQUIRE_NEXT) {
+            yawRef_ = wrapPi(recoveryYaw_ + (missingMs<700 ? 0 :
+                (12.f*ControlCommon::DEG2RAD)*sinf((missingMs-700)*.001f*6.2831853f/6.f)));
+        }
+        holdRouteYaw(ctx, altitudeDemand, visualCfg.maxPower, visualCfg.minPower,
+            altitudeCfg.maxPower, servo1Deg, servo2Deg, motorPower);
+        applyPhysicalCommand(ctx, servo1Deg, servo2Deg, motorPower, motorPower);
+        reportDecision(ctx, 4, 0);
+        Telemetry::sendControl(ctx,yawRef_,searchHeight_,0);
+        Telemetry::sendMission(ctx,(int)state_,visited_,targetCount_,searchHeight_,score,
+            (millis()-missionStartMs_)/1000.f);
+        if (n03 && feedback.fresh && newVisionSample && feedback.state==NiclaFeedback::LOST && !feedback.resetPending)
+            ctx.robot->sensorsuite.resetNiclaTarget();
+        // ACQUIRE still needs its original full-target / route / size filters.
+        if (state_ != ACQUIRE_NEXT || !see) return;
+    }
+
+    // No planar motion without a fresh link/sample. Keep altitude control active.
+    // A temporary N03 missing/ambiguous observation holds APPROACH until recovered.
+    const bool observationHold = n03 && !see &&
+        (state_ == APPROACH || state_ == VISIT_CONFIRM);
+    const bool invalidHeight = !visionBench && !visualTracking && !altitudeControlEnabled;
+    if (state_ != DONE && (!feedback.fresh || observationHold || !isfinite(yaw) || !isfinite(courseYaw_) || invalidHeight)) {
+        advanceGate_.reset();
+        reportDecision(ctx, invalidHeight ? 15 : 1, 0.0f);
+        turnSettled_ = false;
+        closeFrames_ = 0;
+        if (state_ == VISIT_CONFIRM) stateStartMs_ = millis();
+        resetMissionYaw(yaw);
+        applyPhysicalCommand(ctx, SERVO1_Z_DEG, SERVO2_Z_DEG, altitudeDemand, altitudeDemand);
+        Telemetry::sendControl(ctx, yawRef_, searchHeight_, 0.0f);
+        Telemetry::sendMission(ctx, (int)state_, visited_, targetCount_, searchHeight_, score,
+                               (millis() - missionStartMs_) / 1000.0f);
+        if (observationHold && feedback.fresh && feedback.state == NiclaFeedback::LOST) {
+            ctx.robot->sensorsuite.resetNiclaTarget();
+            enter(ctx, visited_ > 0 ? ACQUIRE_NEXT : SEARCH);
+        }
+        return;
+    }
+
     const float heightError = searchHeight_ - height;
 
-    if (state_ != DONE && altitudeControlEnabled) {
+    if (state_ != DONE && altitudeControlEnabled && !visualHeightSeen_ && !visualTracking) {
         const unsigned long nowMs = millis();
 
         // ------------------------------------------------------------
@@ -702,6 +1327,9 @@ void BalloonMission::update(AppContext& ctx) {
         }
 
         if (altitudeCorrectionActive_) {
+            advanceGate_.reset();
+            reportDecision(ctx, 2, 0.0f);
+            turnSettled_ = false;
             // CONFIRMADO CON LOGS EL 24/08 (blimp_20260824_083554.csv):
             //
             // altitudeDemand YA incluye el termino D (-kd*filteredVz), que
@@ -750,6 +1378,7 @@ void BalloonMission::update(AppContext& ctx) {
     switch (state_) {
 
     case SEARCH: {
+        decisionReason = 4;
         // Busca girando siempre a la derecha.
         servo1Deg = SERVO1_RIGHT_DEG;
         servo2Deg = SERVO2_RIGHT_DEG;
@@ -784,9 +1413,10 @@ void BalloonMission::update(AppContext& ctx) {
     }
 
     case APPROACH:
+        decisionReason = 1;
         if (!see || !isfinite(x)) {
             // Si se pierde el globo, vuelve a buscar.
-            enter(ctx, SEARCH);
+            enter(ctx, visited_ > 0 ? ACQUIRE_NEXT : SEARCH);
             break;
         }
         else {
@@ -799,6 +1429,8 @@ void BalloonMission::update(AppContext& ctx) {
             diagnosticFx = visualErrorNorm;
 
             if (fabsf(visualErrorPx) > visualCfg.deadbandPx) {
+                advanceGate_.reset();
+                decisionReason = 5;
                 // ------------------------------------------------------------
                 // CENTRADO VISUAL SOBRE LA CASCADA DE YAW
                 //
@@ -835,7 +1467,7 @@ void BalloonMission::update(AppContext& ctx) {
                 // repite el ultimo valor entre reportes.
                 const unsigned long nowMs = millis();
                 if (!missionYawRefValid ||
-                    (nowMs - missionLastVisionMs) >= VISION_UPDATE_MS) {
+                    (newVisionSample && (nowMs - missionLastVisionMs) >= VISION_UPDATE_MS)) {
                     missionLastVisionMs = nowMs;
                     missionLastNiclaX = x;
                     const float offsetRad = VISION_YAW_SIGN *
@@ -890,9 +1522,8 @@ void BalloonMission::update(AppContext& ctx) {
                 // una correccion de altura grande. Fuera de este bloque
                 // (SEARCH, avance ya centrado) la altura sigue sin tope
                 // extra.
-                const float altitudeDemandForCenter = fminf(
-                    altitudeDemand,
-                    altitudeCfg.maxPower * APPROACH_ALT_POWER_FRACTION);
+                // Do not halve the support power while trying to centre yaw.
+                const float altitudeDemandForCenter = altitudeDemand;
 
                 float etaZ = 1.0f, etaYaw = 0.0f, blend = 0.0f;
                 const float ceiling =
@@ -903,6 +1534,23 @@ void BalloonMission::update(AppContext& ctx) {
                                           etaZ, etaYaw, blend);
             }
             else {
+                // Centrado no significa que haya terminado de girar.
+                // Exigir observaciones nuevas y giro lento antes de dar avance.
+                const float rate = ctx.sensors[SensorMap::YAW_RATE];
+                if (!advanceGate_.active) yawRef_ = yaw;
+                const bool canAdvance = advanceGate_.update(millis(),
+                    VisualHeight::centered(y) && isfinite(rate) && fabsf(rate) <= TURN_RATE_TOLERANCE,
+                    newVisionSample);
+                if (!canAdvance) {
+                    decisionReason = 6;
+                    // Mantener rumbo y altura; no aplicar empuje de avance.
+                    holdRouteYaw(ctx, altitudeDemand, visualCfg.maxPower,
+                        visualCfg.minPower, altitudeCfg.maxPower,
+                        servo1Deg, servo2Deg, motorPower);
+                    break;
+                }
+                decisionReason = 7;
+                forwardRequest = MOVE_POWER;
                 // Ya esta centrado: suelta la referencia de yaw y avanza.
                 resetMissionYaw(yaw);
 
@@ -917,7 +1565,7 @@ void BalloonMission::update(AppContext& ctx) {
                 independentMotors = true;
 
                 // Solo intentamos confirmar visita si esta centrado y cerca.
-                if (score >= VISIT_SCORE_THRESHOLD) {
+                if (visitCalibrated && newVisionSample && score >= visitThreshold) {
                     enter(ctx, VISIT_CONFIRM);
                 }
             }
@@ -925,94 +1573,118 @@ void BalloonMission::update(AppContext& ctx) {
         break;
 
     case VISIT_CONFIRM: {
-        // Frenamos durante la confirmacion para no seguir empujando al globo.
+        decisionReason = 8;
+        // Retirar avance no frena la inercia. Conservar sustentacion vertical
+        // durante la confirmacion; en visionBench altitudeDemand es cero.
         servo1Deg = SERVO1_Z_DEG;
         servo2Deg = SERVO2_Z_DEG;
-        motorPower = 0.0f;
+        motorPower = altitudeDemand;
 
         const bool centered =
             see &&
             isfinite(x) &&
+            VisualHeight::centered(y) &&
             fabsf(x - IMAGE_CENTER_X) <= visualCfg.deadbandPx;
 
-        if (centered && score >= VISIT_SCORE_THRESHOLD) {
-            closeFrames_++;
+        if (visitCalibrated && centered && score >= visitThreshold) {
+            if (newVisionSample) closeFrames_++;
         }
         else {
             closeFrames_ = 0;
 
             if (!see) {
-                enter(ctx, SEARCH);
+                enter(ctx, visited_ > 0 ? ACQUIRE_NEXT : SEARCH);
             }
             else {
                 enter(ctx, APPROACH);
             }
         }
 
-        if (closeFrames_ >= CLOSE_FRAMES_REQUIRED) {
+        const bool arrivalStable = !n03 ||
+            (uint32_t)(millis() - stateStartMs_) >= 500;
+        if (closeFrames_ >= CLOSE_FRAMES_REQUIRED && arrivalStable) {
             visited_++;
+            lastVisitedArea_ = ctx.sensors[SensorMap::NICLA_W_VALUE] *
+                               ctx.sensors[SensorMap::NICLA_H_VALUE];
 
-            // P08 termina justo al confirmar visita.
-            // P09/P10/P11 ejecutan ESCAPE antes de decidir si terminan.
-            if (stopAfterVisit_) {
+            if (stopAfterVisit_ || visited_ >= targetCount_) {
                 enter(ctx, DONE);
             }
             else {
-                enter(ctx, ESCAPE);
+                routeYawRef_ = wrapPi(courseYaw_ + BalloonCourse::heading(track_, visited_ - 1));
+                enter(ctx, TURN_TO_NEXT);
+                Serial.printf("[COURSE] next_waypoint=%d yaw_ref=%.3f\n",
+                    BalloonCourse::waypoint(track_, visited_), yawRef_);
             }
         }
         break;
     }
 
-    case ESCAPE:
-        // Retroceso corto tras visitar.
-        servo1Deg = SERVO1_BACK_DEG;
-        servo2Deg = SERVO2_BACK_DEG;
-        motorPower = MOVE_POWER;
-
-        if (millis() - stateStartMs_ >= ESCAPE_MS) {
-            enter(ctx, WAIT_TARGET_LOST);
+    case TURN_TO_NEXT: {
+        decisionReason = 3;
+        if (millis() - stateStartMs_ >= TURN_TIMEOUT_MS) {
+            enter(ctx, TURN_FAILED);
+            motorPower = altitudeDemand;
+            break;
+        }
+        holdRouteYaw(ctx, altitudeDemand, visualCfg.maxPower, visualCfg.minPower,
+                     altitudeCfg.maxPower, servo1Deg, servo2Deg, motorPower);
+        const float rate = ctx.sensors[SensorMap::YAW_RATE];
+        const bool aligned = fabsf(wrapPi(yawRef_ - yaw)) <= TURN_TOLERANCE_RAD &&
+                             isfinite(rate) && fabsf(rate) <= TURN_RATE_TOLERANCE;
+        if (!aligned) turnSettled_ = false;
+        else if (!turnSettled_) { turnSettled_ = true; turnSettledMs_ = millis(); }
+        else if (millis() - turnSettledMs_ >= TURN_SETTLE_MS) {
+            ctx.robot->sensorsuite.resetNiclaTarget();
+            enter(ctx, ACQUIRE_NEXT);
         }
         break;
-
-    case WAIT_TARGET_LOST:
-        // Gira a la derecha hasta perder obligatoriamente el globo anterior.
-        servo1Deg = SERVO1_RIGHT_DEG;
-        servo2Deg = SERVO2_RIGHT_DEG;
-        {
-            const float altitudeDemandForSearch = fminf(
-                altitudeDemand,
-                altitudeCfg.maxPower * SEARCH_ALT_POWER_FRACTION);
-            motorPower = (searchTurnPower > altitudeDemandForSearch)
-                             ? searchTurnPower : altitudeDemandForSearch;
+    }
+    case ACQUIRE_NEXT:
+        decisionReason = 4;
+        holdRouteYaw(ctx, altitudeDemand, visualCfg.maxPower, visualCfg.minPower,
+                     altitudeCfg.maxPower, servo1Deg, servo2Deg, motorPower);
+        // El tracker LOST es terminal tras su ventana local de recuperacion.
+        // Ya estamos buscando un nuevo waypoint: volver a SEARCH en Nicla,
+        // conservando rumbo de ruta y filtros de objetivo nuevo en la ESP.
+        // resetNiclaTarget invalida fresh hasta recibir un ACK distinto;
+        // no se emiten reinicios repetidos mientras el anterior esta pendiente.
+        if (n03 && newVisionSample && feedback.state == NiclaFeedback::LOST &&
+            !feedback.resetPending) {
+            ctx.robot->sensorsuite.resetNiclaTarget();
+            break;
         }
-
-        if (!see) {
-            lostFrames_++;
-        }
-        else {
-            lostFrames_ = 0;
-        }
-
-        if (lostFrames_ >= LOST_FRAMES_REQUIRED) {
-            // P09: targetCount=1 -> termina.
-            // P10/P11: si faltan globos -> vuelve a SEARCH.
-            if (visited_ >= targetCount_) {
-                enter(ctx, DONE);
-            }
-            else {
-                enter(ctx, SEARCH);
+        if (see && newVisionSample && fabsf(wrapPi(yawRef_ - yaw)) <= TURN_TOLERANCE_RAD &&
+            (!n03 || feedback.state == NiclaFeedback::FULL)) {
+            // A near/contact-sized observation can still be the balloon just visited.
+            // Conservatively require a smaller next target. This may wait if occluded.
+            const float area = ctx.sensors[SensorMap::NICLA_W_VALUE] *
+                               ctx.sensors[SensorMap::NICLA_H_VALUE];
+            if (BalloonCourse::smallerNextTarget(area, lastVisitedArea_)) enter(ctx, APPROACH);
+            else if (n03) {
+                largeTargetRejected_ = true;
+                largeTargetRejectedMs_ = millis();
+                ctx.robot->sensorsuite.resetNiclaTarget();
             }
         }
+        break;
+    case TURN_FAILED:
+        decisionReason = 10;
+        motorPower = 0;
+        if (ctx.robot->actuatorsAreArmed()) ctx.robot->setActuatorsArmed(false);
         break;
 
     case DONE:
+        decisionReason = 9;
         servo1Deg = SERVO1_Z_DEG;
         servo2Deg = SERVO2_Z_DEG;
         motorPower = 0.0f;
         break;
     }
 
+    // Report the command actually computed this cycle; state transitions may
+    // already name the next phase. Never label this as measured translation.
+    reportDecision(ctx, decisionReason, forwardRequest);
     if (!independentMotors) {
         motor1Power = motorPower;
         motor2Power = motorPower;

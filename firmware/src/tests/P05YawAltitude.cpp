@@ -225,7 +225,7 @@ void resetController(const Config& cfg, float yaw, float vz) {
     ctrl.phase       = Phase::ALTITUDE_ACQUIRE;
     ctrl.lastDebugMs = millis();
 
-    resetAltState(ctrl.alt, vz);
+    resetAltState(ctrl.alt, vz, cfg.altLimits.maxPower);
     resetYawState(ctrl.yaw, yaw);
 
     Serial.println("[P05] reset -> ALT_ACQ");

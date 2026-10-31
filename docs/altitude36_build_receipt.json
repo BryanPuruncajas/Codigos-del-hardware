@@ -1,0 +1,17 @@
+{
+  "prepared_at": "2026-10-29T14:19:25.8615794-05:00",
+  "version": 36,
+  "drift_rate_max_m_s": 0.005,
+  "drift_min_span_ms": 2000,
+  "reference_control_max_age_ms": 4000,
+  "noise_band_min_m": 0.03,
+  "source_sensor_values_unchanged": true,
+  "python_guard_tests": 14,
+  "native_suite": "altitude_v36_tests.sh PASS",
+  "build_result": "SUCCESS",
+  "build_seconds": 16.54,
+  "uploaded": false,
+  "physical_validation": false,
+  "known_pending": "First impulse/countdown sequencing in launcher",
+  "firmware_sha256": "8C58643514CF8CF0CE35555CBD53678C5ECBAA18CC974BEC048BB4DF48588767"
+}

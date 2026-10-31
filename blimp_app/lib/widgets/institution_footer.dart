@@ -17,7 +17,7 @@ class InstitutionFooter extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          'Proyecto de tesis',
+          'SPGC',
           style: TextStyle(
             fontSize: 11,
             letterSpacing: 0.6,

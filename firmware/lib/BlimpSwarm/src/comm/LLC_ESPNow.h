@@ -14,6 +14,7 @@
 
 
 #include "LowLevelComm.h"
+#include "FlowProtocol.h"
 #include "WiFi.h"
 #include <esp_now.h> // This is the arduino library for ESP-NOW
 #include "util/ParamManager.h"
@@ -34,6 +35,9 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len);
  * @param status Status indicating whether the information was successfully sent
  */
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
+
+/** Read the newest Flow Deck packet and its age on this XIAO's clock. */
+bool readLatestFlowPacket(FlowProtocol::Packet& packet, uint32_t& ageMs);
 
 class LLC_ESPNow : public LowLevelComm {
 public:

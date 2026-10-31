@@ -108,6 +108,12 @@ def main():
     ap.add_argument('--yaw-servo-authority',type=float,default=75.0,
                     help='Yaw: cuanto se alejan los servos del vector Z, '
                          '12.5..100%% en pasos de 12.5; default 75')
+    ap.add_argument('--yaw-support-hold',action='store_true',
+                    help='P03 experimental: sosten constante + rumbo IMU, sin altura/avance; mixer progresivo')
+    ap.add_argument('--yaw-visual-hold',action='store_true',help='P03 experimental: altura visual + rumbo, sin avance; max16%%')
+    ap.add_argument('--yaw-support-prepare',action='store_true',help='Solo con --yaw-visual-hold: preparar sosten mientras se sujeta; max20s')
+    ap.add_argument('--yaw-support-min-power',type=float,default=14.0,
+                    help='P03 visual: minimo motor durante descenso normal, %% (default14; STOP/fallo siempre0)')
     ap.add_argument('--yaw-base-power',type=float,default=0.0,
                     help='P03: empuje vertical constante en %% durante el ensayo de yaw. '
                          'Pon aqui la potencia de hover medida con p00m; default 0')
@@ -164,12 +170,17 @@ def main():
                          'ascendente confunde ambos y puede dar ganancia negativa.')
     args=ap.parse_args()
 
+    if (args.yaw_support_hold or args.yaw_visual_hold) and args.test != 'p03':
+        raise SystemExit('--yaw-support-hold solo es valido con --test p03.')
+    if args.yaw_support_prepare and not args.yaw_visual_hold:
+        raise SystemExit('--yaw-support-prepare requiere --yaw-visual-hold.')
+
     if not ROBOT_MACS:
         raise SystemExit('Configura ROBOT_MACS en user_parameters.py')
 
     if args.test in {'p03','p05'} and args.yaw_deg is None:
         raise SystemExit('P03/P05 requieren --yaw-deg.')
-    if args.test in {'p04','p05','p08','p09','p10','p11'} and args.height is None:
+    if args.test in {'p04','p05','p08','p09','p10','p11','p11t2'} and args.height is None:
         raise SystemExit('P04/P05 y las misiones P08..P11 requieren --height.')
 
     akp,aki,akd,amax,aslew=_alt_values(args)
@@ -180,7 +191,7 @@ def main():
               f'Se usara {ydb:.0f} grados como zona muerta.')
 
     # ------------------------- VALIDACION ALTURA -------------------------
-    if args.test in {'p04','p05','p08','p09','p10','p11'}:
+    if args.test in {'p04','p05','p08','p09','p10','p11','p11t2'}:
         if akp < 0.0 or aki < 0.0 or akd < 0.0:
             raise SystemExit('Control de altura requiere Kp, Ki y Kd >= 0.')
         if not (0.1 <= amax <= 100.0):
@@ -241,7 +252,7 @@ def main():
         if not (1 <= args.vis_deadband_px <= 100):
             raise SystemExit('--vis-deadband-px debe estar entre 1 y 100.')
 
-    if args.test in {'p08','p09','p10','p11'}:
+    if args.test in {'p08','p09','p10','p11','p11t2'}:
         if args.vis_kp < 0 or args.vis_kd < 0:
             raise SystemExit('Vision requiere --vis-kp y --vis-kd >= 0.')
         if not (0 <= args.vis_min_power <= args.vis_max_power <= 100):

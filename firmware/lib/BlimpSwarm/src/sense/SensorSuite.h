@@ -13,7 +13,7 @@
 
 
 #include "SensorInterface.h"
-#include "Barometer390.h"
+#include "VerticalDiagnostics.h"
 #include "BNO85.h"
 #include "BatterySensor.h"
 
@@ -43,15 +43,22 @@ public:
      * 
      */
     void getPreferences();
+    VerticalDiagnostics verticalDiagnostics() const { return flowVertical; }
+    void publishFlowVertical(const VerticalDiagnostics& d){
+        flowVertical=d;
+        sensorValues[0]=0; // temperature is unavailable: BMP390 is not sampled
+        sensorValues[1]=d.healthy?d.filteredHeight:0.f;
+        sensorValues[2]=d.healthy?d.filteredVelocity:0.f;
+    }
 
 private:
-    Barometer barometer;
+    VerticalDiagnostics flowVertical{};
     BNO85 bnoSensor;
     WeightedBatterySensor batterySensor;
-    // Sensores activos: BMP390 + BNO085/BNO086 + monitor de bateria D8.
+    // Sensors: IMU + battery. Vertical data is injected from Flowdeck only.
     // No hay sensor ultrasonico instalado en esta version de la tesis.
-    float sensorValues[11];
-    int valueCount; // Keep track of the total number of values stored
+    float sensorValues[11]{};
+    int valueCount=11; // Keep track of the total number of values stored
 };
 
 #endif

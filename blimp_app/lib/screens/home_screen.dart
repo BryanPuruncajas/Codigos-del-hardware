@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
-import '../widgets/aerostock_logo.dart';
 import '../widgets/institution_footer.dart';
 import 'viewer_screen.dart';
 import 'dev_screen.dart';
@@ -27,7 +26,10 @@ class HomeScreen extends StatelessWidget {
               ),
               child: Column(
                 children: [
-                  const AeroStockWordmark(markSize: 52, fontSize: 30),
+                  const Text(
+                    'Competencia',
+                    style: TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w800),
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Estación de tierra del blimp de tesis',

@@ -35,6 +35,8 @@ constexpr int PARAM_AUX4 = 9;
 constexpr int PARAM_ARM = 10;
 constexpr int PARAM_RELOAD = 11;
 constexpr int PARAM_RESET = 12;
+// Opt-in computer pilot heartbeat. Legacy app/CLI packets retain reload=0/1.
+constexpr int PILOT_HEARTBEAT_TOKEN=22594;
 
 // K-Power P0025: 0..120 deg nominales = 900..2100 us.
 constexpr int P0025_MIN_US = 900;
@@ -59,6 +61,8 @@ enum Mode : int {
     P09_VISIT_ESCAPE = 18,
     P10_TWO_BALLOONS = 19,
     P11_FOUR_BALLOONS = 20,
+    P11_INFINITY = 21,
+    P12_VISION_BENCH = 22, // Track 2 manual, exclusivamente desarmado.
 };
 
 constexpr uint8_t NICLA_BALLOON_MODE = 0x40;

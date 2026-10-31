@@ -1,0 +1,11 @@
+{
+  "version": "FLOW-TX-v2",
+  "target_mac": "7C:4F:AD:1D:CA:D4",
+  "build_success": true,
+  "parser_test_passed": true,
+  "uploaded": true,
+  "sha256": "0DB0F88BA4A4D3C4DBCAEA7A086F10C4D97EAA8556F36D875EAA5E98B923DAEA",
+  "bytes": 695200,
+  "blocker": null,
+  "upload_verified": "COM3 MAC 7C:4F:AD:1D:CA:D4; esptool hash verified; PlatformIO SUCCESS 11.21s"
+}

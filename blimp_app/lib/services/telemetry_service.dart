@@ -21,12 +21,35 @@ class TelemetrySample {
   const TelemetrySample(this.t, this.height, this.heightRef, this.yawDeg, this.yawRefDeg);
 }
 
+/// Muestras exclusivas de la telemetria F6. Se mantiene separada de la
+/// historia de altura/yaw para que el grafico Flow no mezcle ritmos ni datos.
+class FlowSample {
+  final double t;
+  final double dx;
+  final double dy;
+  final double rangeMm;
+  final double quality;
+  final double ageMs;
+  final int flags;
+
+  const FlowSample({
+    required this.t,
+    required this.dx,
+    required this.dy,
+    required this.rangeMm,
+    required this.quality,
+    required this.ageMs,
+    required this.flags,
+  });
+}
+
 class TelemetryService extends ChangeNotifier {
   WebSocketChannel? _channel;
 
   final Map<String, double> latest = {};
   final List<TelemetryMessage> log = [];
   final List<TelemetrySample> history = [];
+  final List<FlowSample> flowHistory = [];
   DateTime? _historyStart;
 
   bool connected = false;
@@ -80,6 +103,7 @@ class TelemetryService extends ChangeNotifier {
     history.clear();
     log.clear();
     latest.clear();
+    flowHistory.clear();
     _historyStart = null;
   }
 
@@ -117,18 +141,57 @@ class TelemetryService extends ChangeNotifier {
   void _applyTelemetry(Map<String, dynamic> json) {
     final msg = TelemetryMessage.fromJson(json);
     latest.addAll(msg.fields);
+    if (msg.flag == 1 || msg.flag == 3) {
+      latest['received_f${msg.flag}_ms'] = DateTime.now().millisecondsSinceEpoch.toDouble();
+    }
+    if (msg.flag == 8) {
+      latest['mission_decision_received_ms'] =
+          DateTime.now().millisecondsSinceEpoch.toDouble();
+    }
 
+    if (msg.flag == 18) {
+      latest['flow_control_received_at_ms'] = DateTime.now().millisecondsSinceEpoch.toDouble();
+    }
+    if ((latest['vertical_profile_version'] ?? 0) >= 39) {
+      latest.removeWhere((key, value) => key.startsWith('baro_'));
+    }
     _historyStart ??= DateTime.now();
     final elapsed = DateTime.now().difference(_historyStart!).inMilliseconds / 1000.0;
 
-    history.add(TelemetrySample(
-      elapsed,
-      latest['height'] ?? 0,
-      latest['height_ref'] ?? 0,
-      (latest['yaw'] ?? 0) * 180.0 / pi,
-      (latest['yaw_ref'] ?? 0) * 180.0 / pi,
-    ));
+    final flowOnly = (latest['vertical_profile_version'] ?? 0) >= 39;
+    final rangeValid = latest['flow_height_source'] == 2 && ((latest['flow_height_flags'] ?? 0).round() & 8) != 0;
+    if (!flowOnly || rangeValid) {
+      history.add(TelemetrySample(
+        elapsed,
+        latest['height'] ?? 0,
+        latest['height_ref'] ?? 0,
+        (latest['yaw'] ?? 0) * 180.0 / pi,
+        (latest['yaw_ref'] ?? 0) * 180.0 / pi,
+      ));
+    }
     if (history.length > 400) history.removeAt(0);
+
+    if (msg.flag == 6) {
+      latest['flow_received_at_ms'] = DateTime.now().millisecondsSinceEpoch.toDouble();
+      final dx = msg.fields['flow_dx'];
+      final dy = msg.fields['flow_dy'];
+      final rangeMm = msg.fields['flow_range_mm'];
+      final quality = msg.fields['flow_quality'];
+      final ageMs = msg.fields['flow_age_ms'];
+      final flags = msg.fields['flow_flags'];
+      if (dx != null && dy != null && rangeMm != null && quality != null && ageMs != null && flags != null) {
+        flowHistory.add(FlowSample(
+          t: elapsed,
+          dx: dx,
+          dy: dy,
+          rangeMm: rangeMm,
+          quality: quality,
+          ageMs: ageMs,
+          flags: flags.round(),
+        ));
+        if (flowHistory.length > 120) flowHistory.removeAt(0);
+      }
+    }
 
     log.insert(0, msg);
     if (log.length > 200) log.removeLast();
@@ -150,6 +213,22 @@ class TelemetryService extends ChangeNotifier {
   void arm() => _send({'cmd': 'arm'});
   void disarm() => _send({'cmd': 'disarm'});
   void stop() => _send({'cmd': 'stop'});
+
+  /// P12 has a dedicated bridge path: arm=-1, never the ESC arming sequence.
+  void startVisionBench() => _send({'cmd': 'vision_bench_start'});
+
+  Map<String, double>? get currentReferences {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final h = latest['height'], yaw = latest['yaw'];
+    final f1 = latest['received_f1_ms'], f3 = latest['received_f3_ms'];
+    if (!connected || role != 'dev' || demoMode || latest['armed'] != 0 ||
+        h == null || !h.isFinite || yaw == null || !yaw.isFinite ||
+        f1 == null || f3 == null || now - f1 < 0 || now - f3 < 0 ||
+        now - f1 > 1500 || now - f3 > 1500) {
+      return null;
+    }
+    return {'height': h, 'yaw_deg': yaw * 180 / pi};
+  }
 
   /// Control de bajo nivel (fx/fz/tx/tz/aux crudos, indices de ControlInput
   /// directos). Casi nunca lo necesitas: para P03-P11 usa startMission() /
@@ -202,7 +281,7 @@ class TelemetryService extends ChangeNotifier {
     _send({'cmd': 'mission_start', 'test': test, ...params});
     if (!demoMode) {
       await Future.delayed(const Duration(milliseconds: 4300));
-      onStatus?.call('Misión $test corriendo');
+      onStatus?.call('Solicitud $test enviada. Confirma modo y armado en telemetría; STOP automático según duración.');
     }
   }
 
@@ -305,7 +384,7 @@ class TelemetryService extends ChangeNotifier {
       yawDeg = _wrapDeg(yawDeg + yawErr * 0.06 + (_rng.nextDouble() - 0.5) * 0.4);
 
       // Misma maquina de estados que BalloonMission.cpp (SEARCH ->
-      // APPROACH -> VISIT_CONFIRM -> ESCAPE -> WAIT_TARGET_LOST -> ...)
+      // APPROACH -> VISIT_CONFIRM -> TURN_TO_NEXT -> ACQUIRE_NEXT -> ...)
       // para que el stepper y los globos avancen de forma creible.
       switch (missionState) {
         case 0: // SEARCH: gira buscando
@@ -324,20 +403,19 @@ class TelemetryService extends ChangeNotifier {
         case 2: // VISIT_CONFIRM
           if (phaseTimer > 1.2) {
             visited += 1;
-            missionState = 3;
+            missionState = visited >= targetCount ? 5 : 3;
             phaseTimer = 0;
           }
           break;
-        case 3: // ESCAPE
-          heightRef = 0.6 + _rng.nextDouble() * 0.3;
+        case 3: // TURN_TO_NEXT
           if (phaseTimer > 1.8) {
             missionState = 4;
             phaseTimer = 0;
           }
           break;
-        case 4: // WAIT_TARGET_LOST
+        case 4: // ACQUIRE_NEXT
           if (phaseTimer > 1.5) {
-            missionState = visited >= targetCount ? 5 : 0;
+            missionState = 1;
             phaseTimer = 0;
           }
           break;
@@ -385,6 +463,14 @@ class TelemetryService extends ChangeNotifier {
         'search_height': heightRef,
         'visit_score': 0.0,
         'elapsed_s': simT,
+      }});
+      _applyTelemetry({'t': simT, 'flag': 6, 'fields': {
+        'flow_dx': sin(simT * 3.0) * 4.0,
+        'flow_dy': cos(simT * 3.0) * 4.0,
+        'flow_range_mm': 820.0 + sin(simT * 0.8) * 35.0,
+        'flow_quality': 87.0,
+        'flow_age_ms': 35.0 + (simT * 30.0 % 55.0),
+        'flow_flags': 3.0,
       }});
     });
   }

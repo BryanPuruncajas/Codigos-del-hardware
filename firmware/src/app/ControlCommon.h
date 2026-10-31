@@ -1,5 +1,7 @@
 #pragma once
+#ifndef CONTROL_COMMON_HOST_TEST
 #include <Arduino.h>
+#endif
 #include <math.h>
 #include <stdint.h>
 
@@ -133,6 +135,11 @@ constexpr float DEF_ALT_KD        = 0.10f;
 constexpr float DEF_ALT_MIN_POWER = 0.00f;
 constexpr float DEF_ALT_MAX_POWER = 0.15f;
 constexpr float DEF_ALT_SLEW      = 0.18f;
+// Provisional preload for the CURRENT ballast/envelope configuration only.
+// Fixed10% trial on2026-10-24 remained suspended for6s after an initial drop.
+// Not automatic hover calibration, not a minimum-throttle floor. Existing I
+// can decrease it; maxPower and slew still apply. Revalidate after weight changes.
+constexpr float DEF_ALT_START_INTEGRAL = 0.10f;
 constexpr float DEF_ALT_SUCCESS_M = 0.10f;
 
 // Constantes estructurales de altura. IGUALES en P04 y P05: si cambias una,
@@ -603,9 +610,9 @@ struct AltState {
 };
 
 
-inline void resetAltState(AltState& s, float vz) {
+inline void resetAltState(AltState& s, float vz, float maxPower = DEF_ALT_MAX_POWER) {
     s.filteredVz = isfinite(vz) ? vz : 0.0f;
-    s.integral   = 0.0f;
+    s.integral   = isfinite(maxPower) ? constrain(DEF_ALT_START_INTEGRAL, 0.0f, fmaxf(0.0f, maxPower)) : 0.0f;
     s.lastPower  = 0.0f;
 }
 

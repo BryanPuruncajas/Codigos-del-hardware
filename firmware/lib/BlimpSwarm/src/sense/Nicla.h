@@ -14,6 +14,7 @@
 #define BLIMPSWARM_NICLA_H
 
 #include "SensorInterface.h"
+#include "NiclaFeedback.h"
 #include <cstddef>
 #include <IBusBM.h>
 #include <Arduino.h>
@@ -72,9 +73,22 @@ public:
     void getPreferences();
 
 private:
+    // Link freshness only: repeated image content can still be a new packet.
+    static constexpr uint32_t RX_TIMEOUT_MS = 500;
+    uint8_t lastRxCount = 0;
+    uint32_t lastRxMs = 0;
+    bool rxSeen = false;
+    uint32_t lastSampleMs = 0;
+    bool sampleSeen = false;
+    NiclaFeedback feedback_;
+    void resetReception();
+    void invalidateValues();
     float value[10]; // Array to store the values returned by Nicla Vision
     uint8_t mode = BALL_DET; // Default mode the Nicla Vision will start at
     unsigned long sendTime;
+public:
+    const NiclaFeedback& feedback() const { return feedback_; }
+    void resetTarget();
 };
 
 

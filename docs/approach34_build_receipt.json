@@ -1,0 +1,19 @@
+{
+  "prepared_at": "2026-10-29T11:58:28.3805064-05:00",
+  "version": 34,
+  "forward_demand": 0.08,
+  "tilt_limit_deg": 22,
+  "push_ms": 1800,
+  "coast_ms": 900,
+  "occlusion_continuation_ms": 800,
+  "support_start": 0.18,
+  "support_max": 0.25,
+  "arrival_width_px": 120,
+  "python_tests": 14,
+  "native_suite": "approach_v34_tests.sh PASS",
+  "build_result": "SUCCESS",
+  "build_seconds": 53.73,
+  "uploaded": false,
+  "physical_validation": false,
+  "firmware_sha256": "49BEC02430F0C8E8DBFD8787049534A982E7B49CD261EECAA2B7DEFC7CC86663"
+}

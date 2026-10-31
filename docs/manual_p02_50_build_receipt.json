@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-30",
+  "variant": "v40 + P02 adjustable 50%",
+  "firmware_compiled": true,
+  "firmware_sha256": "6A905F2FCE2E2212BBBB1F29DAB1EBC6E93BD5B1764D55D4CBFB8AD6E24EA50C",
+  "firmware_bytes": 839712,
+  "manual_default_percent": 30,
+  "manual_max_percent": 50,
+  "manual_duration_seconds": 120,
+  "real_p02_host_test_passed": true,
+  "bridge_tests_passed": 11,
+  "manual_flutter_tests_passed": 4,
+  "apk_built": true,
+  "apk_sha256": "78C5EA3B8DC9390C1B708688852DECBD23E0E2920091F895D056028105EE8251",
+  "firmware_uploaded": false,
+  "app_installed": false,
+  "ground_120s_restart_pending": true,
+  "height_source": "Flowdeck only",
+  "pins_changed": false,
+  "automatic_power_limits_changed": false
+}

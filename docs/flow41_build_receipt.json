@@ -1,0 +1,19 @@
+{
+  "version": 41,
+  "uploaded": false,
+  "build_success": true,
+  "sha256": "7A1590383C74F62D52C21DE9FCB04B280EC2C8AC41C4F5059A7669CF95104092",
+  "bytes": 839808,
+  "link_fresh_ms": 250,
+  "qualified_recovery_ms": 500,
+  "old_sample_timestamp_preserved": true,
+  "advance_and_arrival_blocked_while_holding": true,
+  "automatic_motor_cap_percent": 25,
+  "manual_P02_previously_requested_default_percent": 30,
+  "manual_P02_previously_requested_max_percent": 50,
+  "native_suite_passed": true,
+  "python_tests_passed": 36,
+  "sampled_replay_baseline_invalid": 3,
+  "sampled_replay_candidate_invalid": 0,
+  "physical_flight_validated": false
+}
