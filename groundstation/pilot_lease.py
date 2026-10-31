@@ -8,10 +8,10 @@ class PilotLease:
         self.owner=None;self.mac=None;self.last_ping=0.;self.task=None
         self.closing=False
 
-    async def claim(self, owner, mac, actuator_status):
+    async def claim(self, owner, mac, actuator_status, allow_armed=False):
         if self.owner is not None or self.closing:raise ValueError('Ya hay un mando con control exclusivo')
-        if actuator_status is None or time.monotonic()-actuator_status[0]>2 or actuator_status[1]!=0:
-            raise ValueError('El mando requiere F3 reciente desarmado para iniciar')
+        if actuator_status is None or time.monotonic()-actuator_status[0]>2 or actuator_status[1] not in ((0,1) if allow_armed else (0,)):
+            raise ValueError('El mando requiere F3 reciente'+('' if allow_armed else ' desarmado')+' para iniciar')
         self.owner,self.mac=owner,mac.lower();self.last_ping=time.monotonic()
         self.task=asyncio.create_task(self.watch())
 

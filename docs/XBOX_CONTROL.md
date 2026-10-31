@@ -15,10 +15,10 @@ El mando se conecta por USB a la computadora. Ground continúa enviando los coma
 | Cruceta abajo, mantenida | Retroceder. |
 | Cruceta derecha, mantenida | Girar a la derecha. |
 | Cruceta izquierda, mantenida | Girar a la izquierda. |
-| Y | Tomar manual desde automático. Una nueva pulsación permite retomar el waypoint pendiente si la misión y sensores lo permiten. |
+| Y | Entrar en manual desde cualquier modo. Si está desarmado, ejecuta el armado con potencia cero. No vuelve a automático. |
 | RB, en manual | Confirmar por decisión del operador el waypoint pendiente. Permanece en manual. |
 | View/Back | STOP y desarmado; termina la sesión. |
-| Menu/Start, en manual desarmado | Iniciar la secuencia de armado manual. No rearma silenciosamente con Y. |
+| Menu/Start, en manual | Retomar una misión pausada; si no existe, preparar un recorrido nuevo estando desarmado y con sensores válidos. |
 
 Potencia manual inicial: 30%. Ajustable de 0 a 50%. Mantener B/X no repite incrementos. En automático, B/X preparan el valor manual y no alteran la potencia automática, limitada al 25%.
 
@@ -74,17 +74,17 @@ Si Ground está en COM9, desde CMD:
 "C:\Users\stefa\.platformio\penv\Scripts\python.exe" -B -X utf8 -u "C:\Users\stefa\Desktop\BLIMP\Competencia\Blimp\Blimp\Codigos-del-hardware\groundstation\telemetry_bridge.py" COM9
 ```
 
-Para un waypoint, abrir `groundstation\05_XBOX_CONTROL.cmd`. Empieza preparando automático y usa cuenta por voz antes de liberar el avance. Y puede tomar manual durante la preparación. La sesión dura 240 segundos en total por defecto, incluida la preparación.
+Abrir `groundstation\05_XBOX_CONTROL.cmd`: empieza en manual desarmado, sin exigir Flowdeck ni una misión previa. Pulsar Y para entrar y armar manual con potencia cero; después soltar A/cruceta y dar una orden nueva. Y también toma control desde automático sin borrar el progreso. La sesión no tiene corte de tiempo por defecto (`--seconds 0`). Para preparar automático al iniciar, usar `--start auto`.
 
-CMD, para track 2 durante hasta 600 segundos de sesión:
+CMD, para iniciar track 2 automático sin límite de sesión:
 
 ```bat
-"C:\Users\stefa\.platformio\penv\Scripts\python.exe" -B -X utf8 -u "C:\Users\stefa\Desktop\BLIMP\Competencia\Blimp\Blimp\Codigos-del-hardware\groundstation\xbox_control.py" --actuate --course track2 --seconds 600
+"C:\Users\stefa\.platformio\penv\Scripts\python.exe" -B -X utf8 -u "C:\Users\stefa\Desktop\BLIMP\Competencia\Blimp\Blimp\Codigos-del-hardware\groundstation\xbox_control.py" --actuate --start auto --course track2 --seconds 0
 ```
 
-Opciones de recorrido: `--course waypoint` (defecto), `--course track1`, `--course track2`. El tiempo de sesión se configura entre 5 y 3600 segundos; los límites temporales internos de la misión continúan activos.
+Opciones de recorrido: `--course waypoint`, `--course track1` (defecto), `--course track2`. `--seconds 0` mantiene la sesión hasta STOP, desconexión o fin del recorrido; también se puede limitar a 5..3600 segundos. Esto elimina el corte global de sesión, no las protecciones de enlace ni los límites internos de búsqueda/giro del firmware. Si el automático falla, el mando queda disponible en manual.
 
-En manual, A/cruceta solo actúan si F3 confirma armado. Si el automático ya se desarmó por una falla, Y selecciona manual y Menu ejecuta un armado nuevo. Retomar con Y requiere Flowdeck y Nicla válidas, la misión pendiente y F3 armado; se conservan recorrido, contactos completados y referencia de rumbo, reconstruyendo controladores transitorios.
+En manual, A/cruceta solo actúan si F3 confirma armado. Pulsar Y estando desarmado ejecuta un armado explícito a potencia cero, sin requerir Flowdeck ni iniciar automático. Mantener un botón de movimiento durante la transición no conserva esa orden: soltarlo y volverlo a pulsar. Los cambios automáticos por fallo no rearman por sí solos. Retomar con Menu requiere Flowdeck y Nicla válidas, misión pendiente y F3 armado; conserva recorrido, progreso y referencia de rumbo.
 
 El Xbox toma control exclusivo en Ground. La app puede seguir observando y STOP permanece disponible desde cualquier cliente. Para volver a controlar desde la app, terminar la sesión Xbox.
 
@@ -100,5 +100,10 @@ Registros: `logs\xbox\<fecha_hora>.jsonl`. Incluyen comandos, telemetría y conf
 
 2026-10-31: compilación ESP32 correcta; 49 pruebas Python correctas; prueba nativa del código real de misión para pausa/reanudación, RB idempotente, rumbo track 2, fin del recorrido y watchdog. Pasan también las regresiones de altura Flowdeck, ausencia de barómetro, rutas de motores y control de yaw/inercia.
 
-La v42 se cargó correctamente en la ESP principal por COM4 (MAC DC:B4:D9:39:B3:B4), con hash verificado. Se reinició el proceso Ground para cargar el soporte Xbox. Windows enumera el mando USB como Xbox Gaming Device (VID 20D6, PID 2061), pero todavía no entrega lecturas por XInput ni GameInput y el operador informa luz apagada. La validación física de botones está pendiente. No se activaron motores como parte de esta integración.
+La v42 se cargó correctamente en la ESP principal por COM4 (MAC DC:B4:D9:39:B3:B4), con hash verificado. Se reinició el proceso Ground para cargar el soporte Xbox. Tras cambiar el cable USB, XInput detectó el mando y la prueba física en modo monitor registró B (30 a 35%), X (35 a 30%), A, las cuatro direcciones de cruceta, Y, RB y View/Back. Menu/Start todavía no se comprobó físicamente. El modo monitor no conecta a Ground ni activa motores. También se comprobó el enlace Xbox -> Ground -> ESP con el blimp por batería: P02 desarmado devolvió en F4 las cinco órdenes (subir, avanzar, retroceder, izquierda y derecha). La prueba registró STOP confirmado, cero comandos de armado y todos los F3 con motores en cero. Registro local: logs/xbox/20261031_114457_disarmed_echo.jsonl. La respuesta física de actuadores y la transición auto/manual en vuelo siguen pendientes. En esta prueba Nicla comunicaba, pero Flowdeck no entregaba muestras; por ello todavía no se puede iniciar el automático.
+
+
+
+
+Actualización de inicio manual: 56 pruebas Python correctas. Toma de control armado requiere petición explícita takeover y F3 reciente; las conexiones normales conservan el requisito de inicio desarmado. La ESP v42, Nicla, pines y filtros de sensores no se modificaron en este ajuste. No se hizo push.
 

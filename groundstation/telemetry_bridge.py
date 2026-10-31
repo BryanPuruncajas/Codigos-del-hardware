@@ -356,7 +356,7 @@ def make_handler(link: BlimpLink, dev_token: str):
                     effective = None
                     if cmd=='pilot_claim':
                         if trial is not None:raise ValueError('Cierra el ensayo anterior antes de tomar el mando')
-                        await pilot.claim(ws,mac,last_actuator_status)
+                        await pilot.claim(ws,mac,last_actuator_status,allow_armed=msg.get('takeover') is True)
                         pilot_client=True
                         await ws.send(json.dumps({'cmd_ok':True,'cmd':cmd,'pilot_version':1}))
                         continue

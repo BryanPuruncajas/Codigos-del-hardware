@@ -4,10 +4,10 @@
   "uploaded": true,
   "sha256": "A9ABD43F253E861E242268C8536F4379B61FCA244875C6240E16AAA5D26042D4",
   "bytes": 840960,
-  "python_tests_passed": 49,
+  "python_tests_passed": 56,
   "native_mission_passed": true,
   "flow_regressions_passed": true,
-  "physical_controller_detected": false,
+  "physical_controller_detected": true,
   "ground_runtime_restarted": true,
   "manual_default_percent": 30,
   "manual_max_percent": 50,
@@ -27,5 +27,34 @@
   "upload_hash_verified": true,
   "upload_seconds": 16.21,
   "controller_pnp": "USB\\VID_20D6&PID_2061\\0000010166DB74D4",
-  "controller_status": "USB enumerated; no XInput or GameInput readings; operator reports no light"
+  "controller_status": "XInput reads physical buttons after USB cable change",
+  "physical_buttons_validated": [
+    "B +5%:30->35",
+    "X -5%:35->30",
+    "A",
+    "Dpad up",
+    "Dpad right",
+    "Dpad down",
+    "Dpad left",
+    "Y toggle",
+    "RB waypoint",
+    "View STOP"
+  ],
+  "menu_button_physically_validated": false,
+  "xbox_to_esp_actuation_validated": false,
+  "xbox_to_esp_disarmed_echo_validated": true,
+  "disarmed_echo_log": "logs/xbox/20261031_114457_disarmed_echo.jsonl",
+  "disarmed_echo_f3_frames": 574,
+  "disarmed_echo_directions": [
+    "A subir",
+    "abajo retroceder",
+    "arriba avanzar",
+    "derecha",
+    "izquierda"
+  ],
+  "disarmed_echo_stop_confirmed": true,
+  "host_direct_manual_entry": true,
+  "host_default_start": "manual_disarmed",
+  "host_session_seconds": 0,
+  "y_behavior": "manual; explicit zero-power arm if disarmed"
 }

@@ -7,9 +7,9 @@ UP, DOWN, LEFT, RIGHT = 0x0001, 0x0002, 0x0004, 0x0008
 START, BACK, RB = 0x0010, 0x0020, 0x0200
 A, B, X, Y = 0x1000, 0x2000, 0x4000, 0x8000
 MOVEMENT = A | UP | DOWN | LEFT | RIGHT
-NAMES = {A:'A subir', B:'B +5%', X:'X -5%', Y:'Y auto/manual',
+NAMES = {A:'A subir', B:'B +5%', X:'X -5%', Y:'Y manual/armar',
          UP:'arriba avanzar', DOWN:'abajo retroceder', LEFT:'izquierda',
-         RIGHT:'derecha', RB:'RB waypoint', BACK:'View STOP', START:'Menu iniciar'}
+         RIGHT:'derecha', RB:'RB waypoint', BACK:'View STOP', START:'Menu automatico'}
 
 class GamepadDisconnected(RuntimeError):
     pass
